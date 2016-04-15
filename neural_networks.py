@@ -1,0 +1,390 @@
+""" Adaptep from Colin Raffel's git repo https://github.com/craffel/ """
+import numpy as np
+import matplotlib.pylab as plt
+import theano
+from theano import tensor as T
+import lasagne
+import nnet_utils
+import seaborn
+
+
+def set_trace():
+    from IPython.core.debugger import Pdb
+    import sys
+    Pdb(color_scheme='Linux').set_trace(sys._getframe().f_back)
+
+
+def train_sequence_rnn(data, layers, updates_fn, batch_size=16, epoch_size=128,
+                       initial_patience=1000, improvement_threshold=0.99,
+                       patience_increase=5, max_iter=100000):
+    # get input and mask vars from layers and specifiy output var
+    input_var = layers[0].input_var
+    mask_var = layers[1].input_var
+    target_var = T.vector('target')
+
+    # create a cost expression for training
+    prediction = lasagne.layers.get_output(layers[2])
+    cost = T.mean((prediction.flatten() - target_var)**2)
+    # create parameter update expressions for training
+    params = lasagne.layers.get_all_params(layers[2], trainable=True)
+
+    print("Computing updates ...")
+    updates = updates_fn(cost, params)
+
+    # compile functions for performing training step and returning
+    # corresponding training cost
+    print("Compiling functions ...")
+    train_fn = theano.function(inputs=[input_var, target_var, mask_var],
+                               outputs=cost,
+                               updates=updates)
+
+    # create cost expression for validation
+    # deterministic forward pass to disable droupout layers
+    val_prediction = lasagne.layers.get_output(layers[2], deterministic=True)
+    val_cost = T.mean((val_prediction.flatten() - target_var)**2)
+    val_output = theano.function([input_var, mask_var], val_prediction)
+    # compile a function to compute the validation cost and objective function
+    validate_fn = theano.function(inputs=[input_var, target_var, mask_var],
+                                  outputs=val_cost)
+
+    # create data iterators
+    train_data_iter = nnet_utils.get_next_batch_rnn(
+        data['train']['without_specs'], data['train']['with_specs'],
+        data['train']['masks'], batch_size, max_iter)
+    patience = initial_patience
+    current_val_cost = np.inf
+    train_cost = 0.0
+    print("Training and Validating ...")
+    for n, (x_batch, y_batch, mask_batch) in enumerate(train_data_iter):
+        train_cost += train_fn(x_batch, y_batch, mask_batch)
+
+        # Stop training if NaN is encountered
+        if not np.isfinite(train_cost):
+            print 'Bad training er {} at iteration {}'.format(train_cost, n)
+            break
+
+        if n and not (n % epoch_size):
+            epoch_result = {'iteration': n,
+                            'train_cost': train_cost / float(epoch_size),
+                            'validate_cost': 0.0,
+                            'validate_objective': 0.0}
+            # compute validation cost and objective
+            cost = np.float(validate_fn(data['validate']['without_specs'],
+                                        data['validate']['with_specs'],
+                                        data['validate']['masks']))
+            epoch_result['validate_cost'] = cost
+            epoch_result['validate_objective'] = cost
+            """
+            n_obs = 8
+            ids = np.random.randint(
+                0, len(data['validate']['without_specs']), n_obs)
+            outs = val_output(data['validate']['without_specs'][ids],
+                              data['validate']['masks'][ids])
+
+            def plot(true, pred, n_obs):
+                j = 0
+                plt.figure(figsize=(10, 6))
+                for i in np.random.randint(0, len(true), n_obs):
+                    plt.subplot(n_obs, 1, j+1)
+                    even = np.arange(0, len(true)*2, 2)
+                    plt.plot(even, true[j], 'go')
+                    plt.plot(even+1, pred[j], 'ro')
+                    j += 1
+                plt.show()
+
+            plot(data['validate']['with_specs'][ids], outs, n_obs)
+            """
+
+            # Test whether this validate cost is the new smallest
+            if epoch_result['validate_cost'] < current_val_cost:
+                # To update patience, we must be smaller than
+                # improvement_threshold*(previous lowest validation cost)
+                patience_cost = improvement_threshold*current_val_cost
+                if epoch_result['validate_cost'] < patience_cost:
+                    # Increase patience by the supplied about
+                    patience += epoch_size*patience_increase
+                # Even if we didn't increase patience, update lowest valid cost
+                current_val_cost = epoch_result['validate_cost']
+            # Store patience after this epoch
+            epoch_result['patience'] = patience
+
+            if n > patience:
+                break
+
+            yield epoch_result
+
+
+def train_sequence(data, layers, updates_fn, batch_size=16, epoch_size=128,
+                   initial_patience=1000, improvement_threshold=0.99,
+                   patience_increase=5, max_iter=100000):
+
+    # specify input and target theano data types
+    input_var = T.matrix('inputs')
+    target_var = T.matrix('targets')
+
+    # create a cost expression for training
+    prediction = lasagne.layers.get_output(layers, input_var)
+    cost = lasagne.objectives.squared_error(prediction, target_var)
+    cost = cost.mean()
+
+    # create parameter update expressions for training
+    params = lasagne.layers.get_all_params(layers, trainable=True)
+    updates = updates_fn(cost, params)
+
+    # compile functions for performing training step and returning
+    # corresponding training cost
+    train_fn = theano.function(inputs=[input_var, target_var],
+                               outputs=cost,
+                               updates=updates)
+
+    # create cost expression for validation
+    # deterministic forward pass to disable droupout layers
+    val_prediction = lasagne.layers.get_output(layers, input_var,
+                                               deterministic=True)
+    val_cost = lasagne.objectives.squared_error(val_prediction, target_var)
+    val_cost = val_cost.mean()
+
+    val_output = theano.function([input_var], val_prediction)
+    # compile a function to compute the validation cost and objective function
+    validate_fn = theano.function(inputs=[input_var, target_var],
+                                  outputs=val_cost)
+
+    # create data iterators
+    train_data_iter = nnet_utils.get_next_batch(data['train']['without_specs'],
+                                                data['train']['with_specs'],
+                                                batch_size, max_iter)
+
+    patience = initial_patience
+    current_val_cost = np.inf
+    train_cost = 0.0
+
+    for n, (x_batch, y_batch) in enumerate(train_data_iter):
+        train_cost += train_fn(x_batch, y_batch)
+
+        # Stop training if NaN is encountered
+        if not np.isfinite(train_cost):
+            print 'Bad training er {} at iteration {}'.format(train_cost, n)
+            break
+
+        if n and not (n % epoch_size):
+            epoch_result = {'iteration': n,
+                            'train_cost': train_cost / float(epoch_size),
+                            'validate_cost': 0.0,
+                            'validate_objective': 0.0}
+
+            # compute validation cost and objective
+            cost = np.float(validate_fn(data['validate']['without_specs'],
+                                        data['validate']['with_specs']))
+
+            epoch_result['validate_cost'] = cost
+            epoch_result['validate_objective'] = cost
+
+            if cost < 6:
+                plt.figure()
+                plt.subplot(121)
+                plt.plot(val_output(data['validate']['without_specs'])[0], 'ro')
+                plt.xlim(-1, 13)
+                plt.ylim(-2, 128)
+                plt.subplot(122)
+                plt.plot(data['validate']['with_specs'][0], 'go')
+                plt.xlim(-1, 13)
+                plt.ylim(-2, 128)
+                plt.show()
+
+            # Test whether this validate cost is the new smallest
+            if epoch_result['validate_cost'] < current_val_cost:
+                # To update patience, we must be smaller than
+                # improvement_threshold*(previous lowest validation cost)
+                patience_cost = improvement_threshold*current_val_cost
+                if epoch_result['validate_cost'] < patience_cost:
+                    # Increase patience by the supplied about
+                    patience += epoch_size*patience_increase
+                # Even if we didn't increase patience, update lowest valid cost
+                current_val_cost = epoch_result['validate_cost']
+            # Store patience after this epoch
+            epoch_result['patience'] = patience
+
+            if n > patience:
+                break
+
+            yield epoch_result
+
+
+def train_proll(data, layers, updates_fn, batch_size=16, epoch_size=128,
+                initial_patience=1000, improvement_threshold=0.99,
+                patience_increase=5, max_iter=100000):
+
+    # specify input and target theano data types
+    input_var = T.matrix('inputs')
+    target_var = T.matrix('targets')
+
+    # create a cost expression for training
+    prediction = lasagne.layers.get_output(layers, input_var)
+    cost = lasagne.objectives.categorical_crossentropy(prediction, target_var)
+    cost = cost.mean()
+
+    # create parameter update expressions for training
+    params = lasagne.layers.get_all_params(layers, trainable=True)
+    updates = updates_fn(cost, params)
+
+    # compile functions for performing training step and returning
+    # corresponding training cost
+    train_fn = theano.function(inputs=[input_var, target_var],
+                               outputs=cost,
+                               updates=updates)
+
+    # create cost expression for validation
+    # deterministic forward pass to disable droupout layers
+    val_prediction = lasagne.layers.get_output(layers, input_var,
+                                               deterministic=True)
+    val_cost = lasagne.objectives.categorical_crossentropy(
+        val_prediction, target_var)
+    val_cost = val_cost.mean()
+    # val_acc = T.mean(T.eq(T.argmax(val_prediction, axis=1), target_var))
+
+    # compile a function to compute the validation cost and objective function
+    validate_fn = theano.function(inputs=[input_var, target_var],
+                                  outputs=val_cost)
+
+    # build a prediction function to manually evaluate output
+    val_output = theano.function([input_var], val_prediction)
+
+    # create data iterators
+    train_data_iter = nnet_utils.get_next_batch(data['train']['without_specs'],
+                                                data['train']['with_specs'],
+                                                batch_size, max_iter)
+
+    patience = initial_patience
+    current_val_cost = np.inf
+    train_cost = 0.0
+
+    for n, (x_batch, y_batch) in enumerate(train_data_iter):
+        train_cost += train_fn(x_batch, y_batch)
+
+        # Stop training if NaN is encountered
+        if not np.isfinite(train_cost):
+            print 'Bad training er {} at iteration {}'.format(train_cost, n)
+            break
+
+        if n and not (n % epoch_size):
+            epoch_result = {'iteration': n,
+                            'train_cost': train_cost / float(epoch_size),
+                            'validate_cost': 0.0,
+                            'validate_objective': 0.0}
+
+            # compute validation cost and objective
+            cost = np.float(validate_fn(data['validate']['without_specs'],
+                                        data['validate']['with_specs']))
+
+            epoch_result['validate_cost'] = cost
+            epoch_result['validate_objective'] = cost
+
+            if cost < 13:
+                import matplotlib.pylab as plt
+                pred = val_output(data['validate']['without_specs'])[0]
+                real = data['validate']['with_specs'][0]
+
+                plt.figure()
+                plt.subplot(121)
+                plt.imshow(pred.reshape(48, 128).T, aspect='auto')
+                plt.subplot(122)
+                plt.imshow(real.reshape(48, 128).T, aspect='auto')
+                plt.show()
+            # Test whether this validate cost is the new smallest
+            if epoch_result['validate_cost'] < current_val_cost:
+                # To update patience, we must be smaller than
+                # improvement_threshold*(previous lowest validation cost)
+                patience_cost = improvement_threshold*current_val_cost
+                if epoch_result['validate_cost'] < patience_cost:
+                    # Increase patience by the supplied about
+                    patience += epoch_size*patience_increase
+                # Even if we didn't increase patience, update lowest valid cost
+                current_val_cost = epoch_result['validate_cost']
+            # Store patience after this epoch
+            epoch_result['patience'] = patience
+
+            if n > patience:
+                break
+
+            yield epoch_result
+
+
+def build_conv_rnn(input_shape, n_filters, filter_size, mask_shape, n_hidden,
+                   grad_clip, init, non_linearities):
+    # input layer
+    l_in = lasagne.layers.InputLayer(shape=input_shape)
+    # convolutional layer
+    l_conv = lasagne.layers.Conv2DLayer(
+        l_in, num_filters=n_filters, filter_size=filter_size,
+        nonlinearity=non_linearities[0],
+        W=lasagne.init.HeNormal(gain='relu'))
+    # mask determines which indices are part of the sequence for each batch
+    l_mask = lasagne.layers.InputLayer(shape=mask_shape)
+    # bidirectional network
+    l_forward = lasagne.layers.RecurrentLayer(
+        l_conv, n_hidden, mask_input=l_mask, grad_clipping=grad_clip,
+        W_in_to_hid=lasagne.init.HeUniform(),
+        W_hid_to_hid=lasagne.init.HeUniform(),
+        nonlinearity=non_linearities[1], only_return_final=True)
+    l_backward = lasagne.layers.RecurrentLayer(
+        l_conv, n_hidden, mask_input=l_mask, grad_clipping=grad_clip,
+        W_in_to_hid=lasagne.init.HeUniform(),
+        W_hid_to_hid=lasagne.init.HeUniform(),
+        nonlinearity=non_linearities[2], only_return_final=True,
+        backwards=True)
+    # concatenate output of forward and backward layers
+    l_concat = lasagne.layers.ConcatLayer([l_forward, l_backward])
+    # output is one dense layer with one output unit
+    l_out = lasagne.layers.DenseLayer(
+        l_concat, num_units=1, nonlinearity=non_linearities[3])
+    return l_in, l_mask, l_out
+
+
+def build_rnn(input_shape, mask_shape, n_hidden, grad_clip, init,
+              non_linearities):
+    # input layer
+    l_in = lasagne.layers.InputLayer(shape=input_shape)
+    # mask determines which indices are part of the sequence for each batch
+    l_mask = lasagne.layers.InputLayer(shape=mask_shape)
+    # bidirectional network
+    l_forward = lasagne.layers.RecurrentLayer(
+        l_in, n_hidden, mask_input=l_mask, grad_clipping=grad_clip,
+        W_in_to_hid=lasagne.init.HeUniform(),
+        W_hid_to_hid=lasagne.init.HeUniform(),
+        nonlinearity=non_linearities[0], only_return_final=True)
+    l_backward = lasagne.layers.RecurrentLayer(
+        l_in, n_hidden, mask_input=l_mask, grad_clipping=grad_clip,
+        W_in_to_hid=lasagne.init.HeUniform(),
+        W_hid_to_hid=lasagne.init.HeUniform(),
+        nonlinearity=non_linearities[1], only_return_final=True,
+        backwards=True)
+    # concatenate output of forward and backward layers
+    l_concat = lasagne.layers.ConcatLayer([l_forward, l_backward])
+    # output is one dense layer with one output unit
+    l_out = lasagne.layers.DenseLayer(
+        l_concat, num_units=1, nonlinearity=non_linearities[2])
+    return l_in, l_mask, l_out
+
+
+def build_general_network(input_shape, n_layers, widths,
+                          non_linearities, drop_out=True):
+    """
+    Parameters
+    ----------
+    input_shape : tuple of int or None (batchsize, rows, cols)
+        Shape of the input. Any element can be set to None to indicate that
+        dimension is not fixed at compile time
+    """
+
+    # GlorotUniform is the default mechanism for initializing weights
+    for i in range(n_layers):
+        if i == 0:  # input layer
+            layers = lasagne.layers.InputLayer(shape=input_shape)
+        else:  # hidden and output layers
+            layers = lasagne.layers.DenseLayer(layers,
+                                               num_units=widths[i],
+                                               nonlinearity=non_linearities[i])
+            if drop_out and i < n_layers-1:  # output layer has no dropout
+                layers = lasagne.layers.DropoutLayer(layers, p=0.5)
+
+    return layers
