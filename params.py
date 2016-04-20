@@ -45,8 +45,8 @@ nnet_params = {
             'n_hidden': 1024,
             'grad_clip': 100,
             'init': lasagne.init.HeUniform(),
-            'non_linearities': (lasagne.nonlinearities.tanh,  # feedforward
-                                lasagne.nonlinearities.tanh,  # feedbackward
+            'non_linearities': (lasagne.nonlinearities.rectify,  # feedforward
+                                lasagne.nonlinearities.rectify,  # feedbackward
                                 lasagne.nonlinearities.linear),  # output layer
             'update_func': lasagne.updates.adadelta
             },
