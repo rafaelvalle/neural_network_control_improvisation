@@ -1,11 +1,12 @@
 """ Adaptep from Colin Raffel's git repo https://github.com/craffel/ """
 import numpy as np
-import matplotlib.pylab as plt
 import theano
 from theano import tensor as T
 import lasagne
 import nnet_utils
 import seaborn
+import pylab as plt
+plt.use('Agg')
 
 
 def set_trace():
@@ -74,26 +75,16 @@ def train_sequence_rnn(data, layers, updates_fn, batch_size=16, epoch_size=128,
                                         data['validate']['masks']))
             epoch_result['validate_cost'] = cost
             epoch_result['validate_objective'] = cost
-            """
-            n_obs = 8
+
+            n_obs = 5000
             ids = np.random.randint(
                 0, len(data['validate']['without_specs']), n_obs)
             outs = val_output(data['validate']['without_specs'][ids],
                               data['validate']['masks'][ids])
 
-            def plot(true, pred, n_obs):
-                j = 0
-                plt.figure(figsize=(10, 6))
-                for i in np.random.randint(0, len(true), n_obs):
-                    plt.subplot(n_obs, 1, j+1)
-                    even = np.arange(0, len(true)*2, 2)
-                    plt.plot(even, true[j], 'go')
-                    plt.plot(even+1, pred[j], 'ro')
-                    j += 1
-                plt.show()
-
-            plot(data['validate']['with_specs'][ids], outs, n_obs)
-            """
+            plt.plot(data['validate']['with_specs'][ids], 'g.')
+            plt.plot(outs, 'r.')
+            plt.savefig('_{}_.png')
 
             # Test whether this validate cost is the new smallest
             if epoch_result['validate_cost'] < current_val_cost:
