@@ -46,21 +46,25 @@ if __name__ == '__main__':
         # Run parameter optimization forever
         nnet_params = nnet_params['proll']
         hyperparameter_space = hyperparameter_space['general_network']
+        train_fn = neural_networks.train_proll
     elif model_name == 'conv_rnn':
         data = generateDataRNN(experiment, spec, n_pitches, n_timesteps,
                                offset, n_obs, min_len, max_len, as_proll)
         nnet_params = nnet_params['conv_rnn']
         hyperparameter_space = hyperparameter_space['conv_rnn']
+        train_fn = neural_networks.train_sequence_rnn
     elif model_name == 'rnn':
         data = generateDataRNN(experiment, spec, n_pitches, n_timesteps,
                                offset, n_obs, min_len, max_len, as_proll)
-        nnet_params = nnet_params['rnn'],
-        hyperparameter_space = hyperparameter_space['rnn'],
+        nnet_params = nnet_params['rnn']
+        hyperparameter_space = hyperparameter_space['rnn']
+        train_fn = neural_networks.train_sequence_rnn
     elif model_name == 'seq':
         data = generateDataRNN(experiment, spec, n_pitches, n_timesteps,
                                offset, n_obs, as_proll)
         nnet_params = nnet_params['seq']
         hyperparameter_space = hyperparameter_space['general_network']
+        train_fn = neural_networks.train_sequence
 
     # Run parameter optimization forever
     bpo.parameter_search(data,
@@ -68,5 +72,5 @@ if __name__ == '__main__':
                          hyperparameter_space,
                          os.path.join(trial_directory, model_name),
                          model_directory,
-                         neural_networks.train_sequence,
+                         train_fn,
                          model_name)
