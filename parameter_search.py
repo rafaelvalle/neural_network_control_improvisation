@@ -2,6 +2,8 @@
 perturbed (missing data) ADULT dataset.
 """
 from __future__ import division
+import matplotlib
+matplotlib.use('Agg')
 import os
 import numpy as np
 import neural_networks
@@ -25,12 +27,12 @@ if __name__ == '__main__':
     model_directory = os.path.join(RESULTS_PATH, 'model')
 
     # Generate training dataset
-    model = 'rnn'
+    model_name = 'rnn'
     experiment = 1
     spec = specs[2]
     as_proll = False
 
-    if model == 'proll':
+    if model_name == 'proll':
         data = generateData(experiment, spec, n_pitches, n_timesteps, offset,
                             n_obs, as_proll)
         # reshape and normalize data
@@ -42,40 +44,29 @@ if __name__ == '__main__':
             data[k] /= np.sum(data[k][0])
 
         # Run parameter optimization forever
-        bpo.parameter_search(data,
-                             nnet_params['proll'],
-                             hyperparameter_space['general_network'],
-                             trial_directory,
-                             model_directory,
-                             neural_networks.train_proll)
-    elif model == 'conv_rnn':
+        nnet_params = nnet_params['proll']
+        hyperparameter_space = hyperparameter_space['general_network']
+    elif model_name == 'conv_rnn':
         data = generateDataRNN(experiment, spec, n_pitches, n_timesteps,
                                offset, n_obs, min_len, max_len, as_proll)
-
-        # Run parameter optimization forever
-        bpo.parameter_search(data,
-                             nnet_params['conv_rnn'],
-                             hyperparameter_space['conv_rnn'],
-                             trial_directory,
-                             model_directory,
-                             neural_networks.train_sequence_rnn)
-    elif model == 'rnn':
+        nnet_params = nnet_params['conv_rnn']
+        hyperparameter_space = hyperparameter_space['conv_rnn']
+    elif model_name == 'rnn':
         data = generateDataRNN(experiment, spec, n_pitches, n_timesteps,
                                offset, n_obs, min_len, max_len, as_proll)
-
-        # Run parameter optimization forever
-        bpo.parameter_search(data,
-                             nnet_params['rnn'],
-                             hyperparameter_space['rnn'],
-                             trial_directory,
-                             model_directory,
-                             neural_networks.train_sequence_rnn)
-    elif model == 'seq':
+        nnet_params = nnet_params['rnn'],
+        hyperparameter_space = hyperparameter_space['rnn'],
+    elif model_name == 'seq':
         data = generateDataRNN(experiment, spec, n_pitches, n_timesteps,
                                offset, n_obs, as_proll)
-        bpo.parameter_search(data,
-                             nnet_params['seq'],
-                             hyperparameter_space['general_network'],
-                             trial_directory,
-                             model_directory,
-                             neural_networks.train_sequence)
+        nnet_params = nnet_params['seq']
+        hyperparameter_space = hyperparameter_space['general_network']
+
+    # Run parameter optimization forever
+    bpo.parameter_search(data,
+                         nnet_params,
+                         hyperparameter_space,
+                         os.path.join(trial_directory, model_name),
+                         model_directory,
+                         neural_networks.train_sequence,
+                         model_name)
