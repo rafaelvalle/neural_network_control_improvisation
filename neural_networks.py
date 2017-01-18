@@ -4,9 +4,10 @@ import theano
 from theano import tensor as T
 import lasagne
 import nnet_utils
-import matplotlib as mpl
-import matplotlib.pylab as plt
-mpl.use('Agg')
+# import seaborn
+import matplotlib
+matplotlib.use('Agg')
+import pylab as plt
 
 import pdb
 
@@ -14,6 +15,7 @@ import pdb
 def train_sequence_rnn(data, layers, updates_fn, batch_size=16, epoch_size=128,
                        initial_patience=1000, improvement_threshold=0.99,
                        patience_increase=5, max_iter=100000):
+
     # get input and mask vars from layers and specifiy output var
     input_var = layers[0].input_var
     mask_var = layers[1].input_var
@@ -38,12 +40,13 @@ def train_sequence_rnn(data, layers, updates_fn, batch_size=16, epoch_size=128,
     # deterministic forward pass to disable droupout layers
     val_prediction = lasagne.layers.get_output(layers[2], deterministic=True)
     val_cost = T.mean((val_prediction.flatten() - target_var)**2)
-    val_output = theano.function([input_var, mask_var], val_prediction)
+    # val_output = theano.function([input_var, mask_var], val_prediction)
     # compile a function to compute the validation cost and objective function
     validate_fn = theano.function(inputs=[input_var, target_var, mask_var],
                                   outputs=val_cost)
 
     # create data iterators
+    print("Create data iterators")
     train_data_iter = nnet_utils.get_next_batch_rnn(
         data['train']['without_specs'], data['train']['with_specs'],
         data['train']['masks'], batch_size, max_iter)
@@ -71,15 +74,22 @@ def train_sequence_rnn(data, layers, updates_fn, batch_size=16, epoch_size=128,
             epoch_result['validate_cost'] = cost
             epoch_result['validate_objective'] = cost
 
+            """
             n_obs = 5000
             ids = np.random.randint(
                 0, len(data['validate']['without_specs']), n_obs)
             outs = val_output(data['validate']['without_specs'][ids],
                               data['validate']['masks'][ids])
 
+            plt.subplot(3,1,1)
             plt.plot(data['validate']['with_specs'][ids], 'g.')
+            plt.subplot(3,1,2)
             plt.plot(outs, 'r.')
-            plt.savefig('_{}_.png')
+            plt.subplot(3,1,3)
+            plt.plot(data['validate']['with_specs'][ids] - outs, 'b.')
+            plt.savefig('img.png')
+            plt.close()
+            """
 
             # Test whether this validate cost is the new smallest
             if epoch_result['validate_cost'] < current_val_cost:
@@ -120,7 +130,7 @@ def train_rnn_proll(data_iter, layers, updates_fn, batch_size=32,
     train_fn = theano.function(inputs=[input_var, target_var, mask_var],
                                outputs=cost,
                                updates=updates)
-    train_pred_fn = theano.function([input_var, mask_var], prediction)
+    # train_pred_fn = theano.function([input_var, mask_var], prediction)
 
     # create cost expression for validation
     # deterministic forward pass to disable droupout layers
@@ -146,7 +156,7 @@ def train_rnn_proll(data_iter, layers, updates_fn, batch_size=32,
     for n, (x_batch, y_batch, mask_batch) in enumerate(data_iter['train']):
         train_cost_cur = train_fn(x_batch, y_batch, mask_batch)
         train_cost += train_cost_cur
-        train_pred = train_pred_fn(x_batch, mask_batch)        
+        # train_pred = train_pred_fn(x_batch, mask_batch)
 
         # Stop training if NaN is encountered
         if not np.isfinite(train_cost):
@@ -219,7 +229,7 @@ def train_sequence(data, layers, updates_fn, batch_size=16, epoch_size=128,
     val_cost = lasagne.objectives.squared_error(val_prediction, target_var)
     val_cost = val_cost.mean()
 
-    val_output = theano.function([input_var], val_prediction)
+    # val_output = theano.function([input_var], val_prediction)
     # compile a function to compute the validation cost and objective function
     validate_fn = theano.function(inputs=[input_var, target_var],
                                   outputs=val_cost)
@@ -253,18 +263,6 @@ def train_sequence(data, layers, updates_fn, batch_size=16, epoch_size=128,
 
             epoch_result['validate_cost'] = cost
             epoch_result['validate_objective'] = cost
-
-            if cost < 6:
-                plt.figure()
-                plt.subplot(121)
-                plt.plot(val_output(data['validate']['without_specs'])[0], 'ro')
-                plt.xlim(-1, 13)
-                plt.ylim(-2, 128)
-                plt.subplot(122)
-                plt.plot(data['validate']['with_specs'][0], 'go')
-                plt.xlim(-1, 13)
-                plt.ylim(-2, 128)
-                plt.show()
 
             # Test whether this validate cost is the new smallest
             if epoch_result['validate_cost'] < current_val_cost:
@@ -355,7 +353,6 @@ def train_proll(data, layers, updates_fn, batch_size=16, epoch_size=128,
             epoch_result['validate_objective'] = cost
 
             if cost < 13:
-                import matplotlib.pylab as plt
                 pred = val_output(data['validate']['without_specs'])[0]
                 real = data['validate']['with_specs'][0]
 
@@ -420,7 +417,9 @@ def build_rnn(input_shape, mask_shape, n_hidden, grad_clip, init,
     # input layer
     l_in = lasagne.layers.InputLayer(shape=input_shape)
     # mask determines which indices are part of the sequence for each batch
-    l_mask = lasagne.layers.InputLayer(shape=mask_shape)
+
+    l_mask = lasagne.layers.InputLayer(shape=mask_shape,
+                                       input_var=T.imatrix())
     # bidirectional network
     l_forward = lasagne.layers.RecurrentLayer(
         l_in, n_hidden, mask_input=l_mask, grad_clipping=grad_clip,

@@ -473,12 +473,12 @@ def generateDataRNN(experiment, specs, n_pitches, n_timesteps, offset, n_obs,
         seq_dict = {}
         # generate melodies with specs
         seq_dict['with_specs'] = [generate1(
-            specs, n_pitches, n_timesteps, offset, as_proll=as_proll)
-            for _ in xrange(n_obs)]
+            specs, n_pitches, n_timesteps, offset, as_proll=as_proll).astype(
+            'float32') for _ in xrange(n_obs)]
 
         # modify melodies not to satisfy specs
         seq_dict['without_specs'] = [generateNot1(
-            seq, specs, offset, as_proll=as_proll)
+            seq, specs, offset, as_proll=as_proll).astype('float32')
             for seq in seq_dict['with_specs']]
 
         # generate masks for the melodies
@@ -492,9 +492,11 @@ def generateDataRNN(experiment, specs, n_pitches, n_timesteps, offset, n_obs,
             seq_dict['with_specs'][i] = seq_dict['with_specs'][i][lens[i]-1]
             seq_dict['masks'][i][:lens[i]] = 1
 
-        seq_dict['without_specs'] = np.array(seq_dict['without_specs']).reshape(
+        seq_dict['without_specs'] = np.array(seq_dict['without_specs'],
+        dtype='float32').reshape(
             (n_obs, n_timesteps,  len(seq_dict['without_specs'][0].shape)))
-        seq_dict['with_specs'] = np.array(seq_dict['with_specs'])
+        seq_dict['with_specs'] = np.array(seq_dict['with_specs'],
+        dtype='float32')
     elif experiment == 2:
         seq_dict = {}
         seq_dict['with_specs'] = np.array([generate2(
