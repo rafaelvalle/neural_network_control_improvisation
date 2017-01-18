@@ -8,10 +8,13 @@ def get_next_batch(inputs, targets, batch_size, n_iters):
         yield inputs[excerpt], targets[excerpt]
 
 
-def get_next_batch_rnn(inputs, targets, masks, batch_size, n_iters):
+def get_next_batch_rnn(inputs, targets, masks, batch_size, n_iters, conds=None):
     for _ in range(n_iters):
         excerpt = np.random.permutation(len(inputs))[:batch_size]
-        yield inputs[excerpt], targets[excerpt], masks[excerpt]
+        if conds is None:
+            yield inputs[excerpt], targets[excerpt], masks[excerpt]
+        else:
+            yield inputs[excerpt], targets[excerpt], masks[excerpt], conds[excerpt]
 
 
 def floatX(X):
