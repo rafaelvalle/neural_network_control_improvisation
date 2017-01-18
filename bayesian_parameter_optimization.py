@@ -3,21 +3,16 @@
  """
 
 import os
+import sys
+import glob
+import pdb
 import numpy as np
 import lasagne
-import deepdish
+import deepdish as dd
 import traceback
 import functools
-import glob
-import sys
 import simple_spearmint
 import neural_networks
-
-
-def set_trace():
-    from IPython.core.debugger import Pdb
-    import sys
-    Pdb(color_scheme='Linux').set_trace(sys._getframe().f_back)
 
 
 def run_trial(data, nnet_params, hyperparameter_space, train_function):
@@ -57,6 +52,8 @@ def run_trial(data, nnet_params, hyperparameter_space, train_function):
         build_network_layers = neural_networks.build_general_network
     elif hyperparameter_space['network'] == 'rnn_network':
         build_network_layers = neural_networks.build_rnn
+    elif hyperparameter_space['network'] == 'rnn_proll_network':
+        build_network_layers = neural_networks.build_rnn_proll
     elif hyperparameter_space['network'] == 'conv_rnn_network':
         build_network_layers = neural_networks.build_conv_rnn
     else:
@@ -64,8 +61,9 @@ def run_trial(data, nnet_params, hyperparameter_space, train_function):
             hyperparameter_space['network']))
 
     # Create train and validation datasets
-    train_ids = np.random.binomial(1, .8, len(data['with_specs'])).astype(bool)
     if hyperparameter_space['network'] in ('rnn_network', 'conv_rnn_network'):
+        train_ids = np.random.binomial(1, .8, len(data['with_specs']))
+        train_ids = train_ids.astype(bool)
         data = {'train': {'without_specs': data['without_specs'][train_ids],
                           'with_specs': data['with_specs'][train_ids],
                           'masks': data['masks'][train_ids]
@@ -75,7 +73,11 @@ def run_trial(data, nnet_params, hyperparameter_space, train_function):
                              'masks': data['masks'][~train_ids]
                              }
                 }
+    elif hyperparameter_space['network'] in ('rnn_proll_network', ):
+        data = data
     else:
+        train_ids = np.random.binomial(1, .8, len(data['with_specs']))
+        train_ids = train_ids.astype(bool)
         data = {'train': {'without_specs': data['without_specs'][train_ids],
                           'with_specs': data['with_specs'][train_ids]
                           },
@@ -85,7 +87,7 @@ def run_trial(data, nnet_params, hyperparameter_space, train_function):
                 }
 
     # build the neural network models
-    if hyperparameter_space['network'] == 'rnn_network':
+    if hyperparameter_space['network'] in ('rnn_network', 'rnn_proll_network'):
         # in rnn layers include l_in, l_mask and l_out
         layers = build_network_layers(
             nnet_params['input_shape'],
@@ -135,8 +137,11 @@ def run_trial(data, nnet_params, hyperparameter_space, train_function):
                 best_objective = epoch['validate_objective']
                 best_epoch = epoch
                 best_model = lasagne.layers.get_all_param_values(layers)
-            print "{}: {}, ".format(epoch['iteration'],
-                                    epoch['validate_objective']),
+            print "{}: {}, {}, {} ".format(
+                epoch['iteration'],
+                epoch['train_cost'],
+                epoch['validate_cost'],
+                epoch['validate_objective'])
             sys.stdout.flush()
     # If there was an error while training, report it to whetlab
     except Exception:
@@ -190,7 +195,7 @@ def parameter_search(data, nnet_params, hyperparameter_space, trial_directory,
     ss = simple_spearmint.SimpleSpearmint(hyperparameter_space)
     # Load in previous results for "warm start"
     for trial_file in glob.glob(os.path.join(trial_directory, '*.h5')):
-        trial = deepdish.io.load(trial_file)
+        trial = dd.io.load(trial_file)
         ss.update(trial['hyperparameters'], trial['best_objective'])
     # Run parameter optimization forever
     while True:
@@ -204,13 +209,13 @@ def parameter_search(data, nnet_params, hyperparameter_space, trial_directory,
         # Write out a result file
         trial_filename = ','.join('{}={}'.format(k, v)
                                   for k, v in suggestion.items()) + '.h5'
-        deepdish.io.save(os.path.join(trial_directory, trial_filename),
-                         {'hyperparameters': suggestion,
-                          'best_objective': best_objective,
-                          'best_epoch': best_epoch})
+        dd.io.save(os.path.join(trial_directory, trial_filename),
+                   {'hyperparameters': suggestion,
+                    'best_objective': best_objective,
+                    'best_epoch': best_epoch})
         # Also write out the entire model when the objective is the smallest
         # We don't want to write all models; they are > 100MB each
         if (not np.isnan(best_objective) and
                 best_objective == np.nanmin(ss.objective_values)):
-            deepdish.io.save(
+            dd.io.save(
                 os.path.join(model_directory, 'best_model.h5'), best_model)
