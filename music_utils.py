@@ -2,12 +2,6 @@ from __future__ import division
 import numpy as np
 
 
-def set_trace():
-    from IPython.core.debugger import Pdb
-    import sys
-    Pdb(color_scheme='Linux').set_trace(sys._getframe().f_back)
-
-
 def generateNot1(seq, spec, offset, ratio=0.5, as_proll=False):
     if as_proll:
         ts_nt = np.argwhere(seq == 1)
@@ -184,27 +178,156 @@ def generate1(spec, n_pitches, n_timesteps, offset, as_proll=False):
     return seq
 
 
-def generate1RNN(spec, n_pitches, n_timesteps, offset, as_proll=False):
+def generateSequence(intervals, min_len, max_len, note_resolution=12, clip=False):
+    """Generates all training data based on intervals
+    
+    PARAMETERS
+    ----------
+    intervals : list
+        List of intervals to use to create the sequence
+    min_len : int
+        Minimum length of sequence
+    max_len : int
+        Maximum length of sequence
+    note_resolution : int
+        Number of output "classes". Sequences will be modulo this number
+
+    RETURNS
+    -------
+    input_data : numpy array
+        List of sequences given specifications less last note
+    target_data : numpy array
+        Batch of last notes of sequences given specifications
+    masks : numpy array
+        Bach of masks used to set sequence lengths
+    """
+
+    # build sequence given intervals
+    scale = np.zeros((len(intervals), note_resolution))
+    scale[np.arange(len(intervals)), np.cumsum(intervals) % note_resolution] = 1
+    # shift to obtain different modes
+    # seqs = [np.roll(scale, -i, axis=0) for i in xrange(len(scale))]
+    seqs = [scale]
+    # shift to obtain different tonics
+    for i in xrange(len(seqs)):
+        for j in xrange(1, note_resolution):
+            sequence = np.roll(seqs[i], -j, axis=1)
+            seqs.append(sequence)
+    # add reverse of all scales
+    for i in xrange(len(seqs)):
+        seqs.append(seqs[i][::-1])
+    # create all possible masks per sequence of length [min_len, max_len]
+    masks = []
+    for i in xrange(min_len, max_len):
+        mask = np.zeros((len(intervals), ), dtype=np.int32)
+        mask[:i] = 1
+        masks.append(mask)
+        # not necessary to shift masks because sequences are shifted
+        # for j in xrange(0, 1+max_len - i):
+        #    masks.append(np.roll(mask, j))
+
+    # cartesian product between masks and sequences, adding target 
+    input_data, target_data, mask_data = [], [], []
+    for mask in masks:
+        for seq in seqs:
+            if clip:
+                temp = np.copy(seq)
+                temp[np.count_nonzero(mask):] = 0.0
+                input_data.append(temp)
+            else:
+                input_data.append(seq)
+            target_data.append(seq[np.count_nonzero(mask)])
+            mask_data.append(mask)
+
+    input_data = np.array(input_data)
+    target_data = np.array(target_data, dtype=np.int32)
+    mask_data = np.array(mask_data, dtype=np.int32)
+
+    return input_data, target_data, mask_data
+        
+
+def generateSequenceIter(batch_size, intervals, min_len, max_len,
+                     note_resolution=12):
+    """Generates training data based on intervals.
+
+    PARAMETERS
+    ----------
+    batch_size : int
+        Number of sequences to generate
+    intervals : list
+        List of intervals to use to create the sequence
+    note_resolution : int
+        Number of output "classes". Sequences will be modulo this number
+
+    RETURNS
+    -------
+    input_data : iterator
+        Batch of sequences given specifications less last note
+    target_data : iterator
+        Batch of last notes of sequences given specifications
+    masks : masks
+        Bach of masks used to set sequence lengths
+    """
+
+    # build sequence given intervals
+    scale = np.zeros((len(intervals), note_resolution))
+    scale[np.arange(len(intervals)), np.cumsum(intervals) % note_resolution] = 1
+
+    while True:
+        # input_data = []
+        # target_data = []
+        seq = np.zeros((batch_size, len(intervals), note_resolution),
+                       dtype=np.int32)
+        masks = np.zeros((batch_size, len(intervals)), dtype=np.int32)
+        rnd_tonic = np.random.randint(0, len(intervals), batch_size)
+        rnd_mode = np.random.randint(0, len(intervals), batch_size)
+        rnd_lens = np.random.randint(min_len, max_len, batch_size)
+        rnd_invs = 2 * np.random.randint(0, 2, batch_size) - 1
+        targets = np.zeros((batch_size, note_resolution), dtype=np.int32)
+        for i in xrange(batch_size):
+            # shift to obtain different mode
+            sequence = np.roll(scale, -rnd_mode[i], axis=0)
+            # shift to obtain different tonic
+            sequence = np.roll(scale, -rnd_tonic[i], axis=1)
+            # randomize length
+            # sequence = sequence[:rnd_lens[i]]
+            # randomize reverse
+            sequence = sequence[::rnd_invs[i]]
+            # input_data.append(sequence[:-1])
+            # target_data.append(sequence[-1])
+            seq[i] = sequence
+            masks[i, :rnd_lens[i]] = 1
+            targets[i] = seq[i, rnd_lens[i]]
+        yield seq, targets, masks
+
+
+def generate1RNN(spec, n_pitches, n_timesteps, offset, as_proll=False,
+                 note_resolution=128):
     """Generates melodies according to experiment 1
 
-    Parameters
+    PARAMETERS
     ----------
     spec : list of tuples ((pitch classes), int)
         List with pitch sets and their onset location in timesteps
+    n_pitches : int
+        Desired number of pitches in the generated melody
     n_timesteps : int
-        Number of timesteps in the melody
+        Desired number of timesteps in the melody
+    offset : int
+        Offset for generated melody
 
-    Returns
+    RETURNS
     -------
     seq : np.ndarray
         piano roll containing the melody
     """
     if as_proll:
-        seq = np.zeros((n_timesteps, 128), dtype=int)
+        # melody buffer
+        seq = np.zeros((n_timesteps, note_resolution), dtype=int)
+        # choose time steps that will have note events
         notes_ts = np.random.choice(
             np.arange(n_timesteps), n_pitches, replace=False)
 
-        i = -1
         for i in xrange(len(spec)-1):
             cur_ts = [ts for ts in notes_ts
                       if ts >= spec[i][1] and ts < spec[i+1][1]]
