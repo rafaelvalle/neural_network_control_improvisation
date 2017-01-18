@@ -8,8 +8,8 @@ import neural_networks
 import bayesian_parameter_optimization as bpo
 from params import nnet_params, hyperparameter_space
 from params import specs, n_pitches, n_timesteps, offset, n_obs
-from params import min_len, max_len
-from music_utils import generateData, generateDataRNN
+from params import min_len, max_len, int_maj, batch_size, val_size, test_size
+from music_utils import generateData, generateDataRNN, generateSequence
 
 
 def set_trace():
@@ -25,7 +25,7 @@ if __name__ == '__main__':
     model_directory = os.path.join(RESULTS_PATH, 'model')
 
     # Generate training dataset
-    model = 'rnn'
+    model = 'rnn_proll'
     experiment = 1
     spec = specs[2]
     as_proll = False
@@ -59,6 +59,19 @@ if __name__ == '__main__':
                              trial_directory,
                              model_directory,
                              neural_networks.train_sequence_rnn)
+    elif model == 'rnn_proll':
+        data = {
+            'train': generateSequence(batch_size, int_maj, min_len, max_len),
+            'valid': generateSequence(val_size, int_maj, min_len, max_len),
+            'test': generateSequence(test_size, int_maj, min_len, max_len)
+            }
+        # Run parameter optimization forever
+        bpo.parameter_search(data,
+                             nnet_params['rnn_proll'],
+                             hyperparameter_space['rnn_proll'],
+                             trial_directory,
+                             model_directory,
+                             neural_networks.train_rnn_proll)
     elif model == 'rnn':
         data = generateDataRNN(experiment, spec, n_pitches, n_timesteps,
                                offset, n_obs, min_len, max_len, as_proll)
