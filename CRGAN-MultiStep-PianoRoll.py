@@ -82,7 +82,7 @@ if arch == 1:
                'learning_rate': 0.01,
                'regularization': 0.0,
                'unroll': 10,
-               'iterations_pre': 0,
+               'iterations_pre': 100,
                }
 
     # declare generator specs
@@ -284,7 +284,7 @@ def sample_data(data, batch_size, min_len, max_len, clip=False):
         yield inputs, conds, masks
 
 
-def build_training(discriminator, generator, d_specs, g_specs, orig_loss=False):
+def build_training(discriminator, generator, d_specs, g_specs):
     d_params = lasagne.layers.get_all_params(discriminator.l_out, trainable=True)
     g_params = lasagne.layers.get_all_params(generator.l_out, trainable=True)
 
@@ -306,13 +306,13 @@ def build_training(discriminator, generator, d_specs, g_specs, orig_loss=False):
                                             discriminator.l_mask: d_in_M})
     # loss functions
     g_loss = lasagne.objectives.binary_crossentropy(
-        T.clip(d_g_z, 1e-7, 1.0 - 1e-7), 0.9)
+        T.clip(d_g_z, 1e-7, 1.0 - 1e-7), 0.95)
     g_loss = g_loss.mean()
 
     d_x_loss = lasagne.objectives.binary_crossentropy(
-        T.clip(d_x, 1e-7, 1.0 - 1e-7), 0.9)
+        T.clip(d_x, 1e-7, 1.0 - 1e-7), 0.95)
     d_g_z_loss = lasagne.objectives.binary_crossentropy(
-        T.clip(d_g_z, 1e-7, 1.0 - 1e-7), 0.1)
+        T.clip(d_g_z, 1e-7, 1.0 - 1e-7), 0.05)
 
     d_loss = d_x_loss + d_g_z_loss
     d_loss = d_loss.mean()
@@ -379,21 +379,32 @@ d_train_fn, g_train_fn = build_training(
 # D(x)
 data_iter = sample_data(data_dict, d_batch_size, min_len, max_len)
 
-# Pre training
+# pre training variables
 n_d_iterations_pre = d_specs.get('iterations_pre', 0)
 d_losses_pre = []
 
+# training variables
+d_losses = []
+g_losses = []
+n_iterations = int(5e4)
+n_d_iterations = 5
+n_g_iterations = 1
+epoch = 100
+
 folderpath = (
-    'piano_multistep_lstm_gan_pre_'
-    '{}_dlr_{}_glr_{}_bs_{}_temp_{}_'
-    'nunits_{}_nt{}_crop_{}_'
-    'unroll_{}').format(n_d_iterations_pre, d_specs['learning_rate'],
-                        g_specs['learning_rate'], d_batch_size, temperature,
-                        n_units_g, n_timesteps, crop, d_specs['unroll'])
+    'piano_multistep_lstm_gan_pre{}'
+    'dlr{}glr{}dit{}git{}'
+    'bs{}temp{}nunits{}nt{}'
+    'crop{}unroll{}').format(n_d_iterations_pre,
+                             d_specs['learning_rate'], g_specs['learning_rate'],
+                             n_d_iterations, n_g_iterations,
+                             d_batch_size, temperature, n_units_g,
+                             n_timesteps, crop, d_specs['unroll'])
 
 if not os.path.exists(os.path.join('images', folderpath)):
     os.makedirs(os.path.join('images', folderpath))
 
+# pre training loop
 for i in range(d_specs.get('iterations_pre', 0)):
     # use same data for discriminator and generator
     d_X, d_C, d_M = data_iter.next()
@@ -409,9 +420,9 @@ for i in range(d_specs.get('iterations_pre', 0)):
     if i == (n_d_iterations_pre - 1):
         fig, axes = plt.subplots(4, 2, figsize=(12, 15))
         axes[0, 0].set_title('D(x)')
-        sbn.heatmap(d_x.T, ax=axes[1, 0])
+        sbn.heatmap(d_x.T, ax=axes[0, 0])
         axes[0, 1].set_title('D(G(z))')
-        sbn.heatmap(d_g_z.T, ax=axes[1, 1])
+        sbn.heatmap(d_g_z.T, ax=axes[0, 1])
 
         axes[1, 0].set_title('G(z) : 0')
         axes[1, 1].set_title('G(z) : 1')
@@ -426,15 +437,7 @@ for i in range(d_specs.get('iterations_pre', 0)):
         axes[3, 0].plot(d_losses_pre)
         plt.close('all')
 
-
-# training variables
-d_losses = []
-g_losses = []
-n_iterations = int(1e4)
-n_d_iterations = 5
-n_g_iterations = 1
-epoch = 100
-
+# training loop
 for iteration in tqdm(range(n_iterations)):
     for i in range(n_d_iterations):
         # load data
