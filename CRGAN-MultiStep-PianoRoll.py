@@ -1,3 +1,7 @@
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pylab as plt
+plt.ioff()
 import os
 import functools
 from collections import defaultdict
@@ -9,14 +13,11 @@ import theano.tensor as T
 import lasagne
 from IPython import display
 from tqdm import tqdm
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pylab as plt
 import pdb
 
 # load data from each class
-datapath = '/Users/rafaelvalle/Desktop/datasets/Piano/'
-glob_folder = '/Users/rafaelvalle/Desktop/datasets/Piano/*/'
+datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Piano'
+glob_folder = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Piano/*/'
 glob_file = '*.npy'
 data_dict = defaultdict(list)
 n_pieces = 8
@@ -80,7 +81,7 @@ if arch == 1:
                    sigmoid_temperature),  # sigmoid with temperature
                'learning_rate': 0.01,
                'regularization': 0.0,
-               'unroll': 0,
+               'unroll': 10,
                'iterations_pre': 0,
                }
 
@@ -320,7 +321,7 @@ def build_training(discriminator, generator, d_specs, g_specs, orig_loss=False):
     # update functions
     d_updates = lasagne.updates.sgd(d_loss, d_params, d_specs['learning_rate'])
     if d_specs.get('unroll', 0):
-        def fprop(d_in_X, d_in_M, d_labels, g_z):
+        def fprop(d_in_X, d_in_M, g_z):
             return [g_loss, d_updates]
 
         values, updates = theano.scan(fprop, n_steps=d_specs['unroll'],
