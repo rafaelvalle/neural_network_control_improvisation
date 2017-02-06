@@ -16,8 +16,8 @@ from tqdm import tqdm
 import pdb
 
 # load data from each class
-datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Piano'
-glob_folder = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Piano/*/'
+datapath = '/Users/rafaelvalle/Desktop/datasets/Piano'
+glob_folder = '/Users/rafaelvalle/Desktop/datasets/Piano/*/'
 glob_file = '*.npy'
 data_dict = defaultdict(list)
 n_pieces = 8
@@ -39,10 +39,10 @@ for folderpath in glob.glob(glob_folder):
         cur_data = cur_data * 2 - 1
         data_dict[composer].append(cur_data)
 
-d_batch_size = g_batch_size = len(data_dict) * 16
-min_len = 32
-max_len = 64
-n_timesteps = 128  # 100ms per step
+d_batch_size = g_batch_size = len(data_dict) * 32
+min_len = 128
+max_len = 64*4
+n_timesteps = 64*4  # 100ms per step
 n_features = data_dict[data_dict.keys()[0]][0].shape[1]
 n_conditions = len(data_dict.keys())
 temperature = 1.
@@ -79,9 +79,9 @@ if arch == 1:
                    lasagne.nonlinearities.rectify,  # feedforward
                    lasagne.nonlinearities.rectify,  # feedbackward
                    sigmoid_temperature),  # sigmoid with temperature
-               'learning_rate': 0.01,
-               'regularization': 0.0,
-               'unroll': 10,
+               'learning_rate': 0.001,
+               'regularization': 1e-5,
+               'unroll': 0,
                'iterations_pre': 100,
                }
 
@@ -100,7 +100,7 @@ if arch == 1:
                    lasagne.nonlinearities.rectify,  # forw and backward noise
                    lasagne.nonlinearities.rectify,  # data and noise lstm concat
                    lasagne.nonlinearities.tanh),
-               'learning_rate': 0.01
+               'learning_rate': 0.001
                }
 elif arch == 2:
     raise Exception("arch 2 not implemented")
@@ -246,7 +246,8 @@ def build_generator_lstm(params, arch=1):
     return Generator(l_in, l_noise, l_cond, l_mask, l_out)
 
 
-def sample_data(data, batch_size, min_len, max_len, clip=False):
+def sample_data(data, batch_size, min_len, max_len, clip=False,
+                single_length=True):
     encoding = defaultdict(lambda _: 0)
     i = 0
     for k in data.keys():
@@ -257,12 +258,17 @@ def sample_data(data, batch_size, min_len, max_len, clip=False):
 
     while True:
         inputs, conds, masks = [], [], []
+        if single_length:
+            # same length within batch
+            mask_size = np.random.randint(min_len, max_len)
         for k, lbl in encoding.items():
                 pieces = np.random.choice(data[k], pieces_per_lbl)
                 for piece in pieces:
                     start_idx = np.random.randint(0, piece.shape[0] -max_len -1)
                     piece_data = piece[start_idx: start_idx+max_len]
-                    mask_size = np.random.randint(min_len, max_len)
+                    if not single_length:
+                        # different lengths within batch
+                        mask_size = np.random.randint(min_len, max_len)
                     if clip:
                         piece_data[mask_size:] = 0
 
@@ -405,7 +411,8 @@ if not os.path.exists(os.path.join('images', folderpath)):
     os.makedirs(os.path.join('images', folderpath))
 
 # pre training loop
-for i in range(d_specs.get('iterations_pre', 0)):
+print("pre-training")
+for i in range(n_d_iterations_pre):
     # use same data for discriminator and generator
     d_X, d_C, d_M = data_iter.next()
     g_X, g_C, g_M = d_X, d_C, d_M
@@ -432,12 +439,13 @@ for i in range(d_specs.get('iterations_pre', 0)):
         sbn.heatmap(g_z[1].T, ax=axes[1, 1]).invert_yaxis()
         sbn.heatmap(g_z[2].T, ax=axes[2, 0]).invert_yaxis()
         sbn.heatmap(g_z[3].T, ax=axes[2, 1]).invert_yaxis()
-        fig.savefig('images/{}/pretraining'.format(folderpath))
         axes[3, 0].set_title('Loss(d)')
         axes[3, 0].plot(d_losses_pre)
+        fig.savefig('images/{}/pretraining'.format(folderpath))
         plt.close('all')
 
 # training loop
+print("training")
 for iteration in tqdm(range(n_iterations)):
     for i in range(n_d_iterations):
         # load data
