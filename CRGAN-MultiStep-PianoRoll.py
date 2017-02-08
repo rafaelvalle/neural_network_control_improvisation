@@ -5,7 +5,6 @@ plt.ioff()
 import os
 import functools
 from collections import defaultdict
-import glob2 as glob
 import numpy as np
 import seaborn as sbn
 import theano
@@ -13,51 +12,40 @@ import theano.tensor as T
 import lasagne
 from IPython import display
 from tqdm import tqdm
+from data_processing import load_data
 import pdb
 
-# load data from each class
-datapath = '/Users/rafaelvalle/Desktop/datasets/Piano'
-glob_folder = '/Users/rafaelvalle/Desktop/datasets/Piano/*/'
-glob_file = '*.npy'
-data_dict = defaultdict(list)
-n_pieces = 8
+# data params
+datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Piano'
+glob_file_str = '*.npy'
+n_pieces = 0  # 0 is equal to all pieces, unbalanced dataset
 crop = (32, 96)
+as_dict = True
 
-for folderpath in glob.glob(glob_folder):
-    composer = os.path.basename(os.path.normpath(folderpath))
-    filepaths = glob.glob(os.path.join(
-        os.path.join(datapath, composer), '*.npy'))
-    for filepath in np.random.choice(filepaths, n_pieces, replace=False):
-        cur_data = np.load(filepath)
-        if crop is not None:
-            cur_data = cur_data[:, crop[0]:crop[1]]
+# load data
+dataset = load_data(datapath, glob_file_str, n_pieces, crop, as_dict)
 
-        # scale each frame [-1, 1]
-        cur_data += cur_data.min(axis=1)[:, None]
-        cur_data /= cur_data.max(axis=1)[:, None]
-        cur_data = np.nan_to_num(cur_data)
-        cur_data = cur_data * 2 - 1
-        data_dict[composer].append(cur_data)
-
-d_batch_size = g_batch_size = len(data_dict) * 32
-min_len = 128
-max_len = 64*4
-n_timesteps = 64*4  # 100ms per step
-n_features = data_dict[data_dict.keys()[0]][0].shape[1]
-n_conditions = len(data_dict.keys())
+# model params
+d_batch_size = g_batch_size = 256
+n_timesteps = 100  # 200 ms per step
+min_len = 50
+max_len = 100
+single_len = True
+n_features = dataset[dataset.keys()[0]][0].shape[1]
+n_conditions = len(dataset.keys())
 temperature = 1.
 n_units_d = 8
-n_units_g = 32
+n_units_g = 8
+arch = 1
 
 
-def output_nonlinearity(data, temperature=1):
-    return T.clip(lasagne.nonlinearities.sigmoid(data / temperature),
+def output_nonlinearity(x, temperature=1):
+    return T.clip(lasagne.nonlinearities.sigmoid(x / temperature),
                   1e-7, 1 - 1e-7)
 
 sigmoid_temperature = functools.partial(
     output_nonlinearity, temperature=temperature)
 
-arch = 1
 if arch == 1:
     # declare theano variables
     d_in_X = T.ftensor3('ddata')
@@ -80,9 +68,8 @@ if arch == 1:
                    lasagne.nonlinearities.rectify,  # feedbackward
                    sigmoid_temperature),  # sigmoid with temperature
                'learning_rate': 0.001,
-               'regularization': 1e-5,
+               'regularization': 1e-4,
                'unroll': 0,
-               'iterations_pre': 100,
                }
 
     # declare generator specs
@@ -107,7 +94,7 @@ elif arch == 2:
 elif arch == 3:
     raise Exception("arch 2 not implemented")
 
-# lstm parameters
+# lstm gate and cell parameters
 gate_parameters = lasagne.layers.recurrent.Gate(
     W_in=lasagne.init.Orthogonal(),
     W_hid=lasagne.init.Orthogonal(),
@@ -131,12 +118,14 @@ def build_discriminator(params):
     # recurrent layers for bidirectional network
     l_forward = lasagne.layers.LSTMLayer(
         l_in, params['n_units'], grad_clipping=params['grad_clip'],
-        # W_in_to_hid=params['init'], W_hid_to_hid=params['init'],
+        ingate=gate_parameters, forgetgate=gate_parameters,
+        cell=cell_parameters, outgate=gate_parameters,
         nonlinearity=params['non_linearities'][0], only_return_final=True,
         mask_input=l_mask)
     l_backward = lasagne.layers.LSTMLayer(
         l_in, params['n_units'], grad_clipping=params['grad_clip'],
-        # W_in_to_hid=params['init'], W_hid_to_hid=params['init'],
+        ingate=gate_parameters, forgetgate=gate_parameters,
+        cell=cell_parameters, outgate=gate_parameters,
         nonlinearity=params['non_linearities'][1], only_return_final=True,
         mask_input=l_mask, backwards=True)
 
@@ -247,7 +236,7 @@ def build_generator_lstm(params, arch=1):
 
 
 def sample_data(data, batch_size, min_len, max_len, clip=False,
-                single_length=True):
+                single_len=True):
     encoding = defaultdict(lambda _: 0)
     i = 0
     for k in data.keys():
@@ -258,29 +247,29 @@ def sample_data(data, batch_size, min_len, max_len, clip=False,
 
     while True:
         inputs, conds, masks = [], [], []
-        if single_length:
+        if single_len:
             # same length within batch
             mask_size = np.random.randint(min_len, max_len)
         for k, lbl in encoding.items():
-                pieces = np.random.choice(data[k], pieces_per_lbl)
-                for piece in pieces:
-                    start_idx = np.random.randint(0, piece.shape[0] -max_len -1)
-                    piece_data = piece[start_idx: start_idx+max_len]
-                    if not single_length:
-                        # different lengths within batch
-                        mask_size = np.random.randint(min_len, max_len)
-                    if clip:
-                        piece_data[mask_size:] = 0
+            pieces = np.random.choice(data[k], pieces_per_lbl)
+            for piece in pieces:
+                start_idx = np.random.randint(0, piece.shape[0] - max_len - 1)
+                piece_data = piece[start_idx: start_idx+max_len]
+                if not single_len:
+                    # different lengths within batch
+                    mask_size = np.random.randint(min_len, max_len)
+                if clip:
+                    piece_data[mask_size:] = 0
 
-                    cond = np.zeros((max_len, len(encoding)), dtype=np.float32)
-                    cond[:, encoding[k]] = 1
+                cond = np.zeros((max_len, len(encoding)), dtype=np.float32)
+                cond[:, encoding[k]] = 1
 
-                    mask = np.zeros(max_len, dtype=np.int32)
-                    mask[:mask_size] = 1
+                mask = np.zeros(max_len, dtype=np.int32)
+                mask[:mask_size] = 1
 
-                    inputs.append(piece_data)
-                    conds.append(cond)
-                    masks.append(mask)
+                inputs.append(piece_data)
+                conds.append(cond)
+                masks.append(mask)
 
         shuffle_ids = np.random.randint(0, len(inputs), len(inputs))
         inputs = np.array(inputs, dtype=np.float32)[shuffle_ids]
@@ -302,7 +291,7 @@ def build_training(discriminator, generator, d_specs, g_specs):
                                             generator.l_mask: g_in_M})
 
     # D(G(z))
-    g_z_M = T.ones((g_z.shape[0], g_z.shape[1]))
+    g_z_M = T.ones((g_z.shape[0], g_z.shape[1]))  # mask
     d_g_z = lasagne.layers.get_output(discriminator.l_out,
                                       inputs={discriminator.l_in: g_z,
                                               discriminator.l_mask: g_z_M})
@@ -343,17 +332,20 @@ def build_training(discriminator, generator, d_specs, g_specs):
     d_train_fn = theano.function(
         inputs=[d_in_X, d_in_M, g_in_D, g_in_Z, g_in_C, g_in_M],
         outputs=[d_loss, d_x_loss, d_g_z_loss, d_x, d_g_z, g_z],
-        updates=d_updates)
+        updates=d_updates,
+        name='d_train')
     if d_specs.get('unroll', 0):
         g_train_fn = theano.function(
             inputs=[g_in_D, g_in_Z, g_in_C, g_in_M, d_in_M, d_in_X],
             outputs=g_loss,
-            updates=g_updates)
+            updates=g_updates,
+            name='g_train_unroll')
     else:
         g_train_fn = theano.function(
             inputs=[g_in_D, g_in_Z, g_in_C, g_in_M],
             outputs=g_loss,
-            updates=g_updates)
+            updates=g_updates,
+            name='g_train')
     """
     # gradient functions
     grad_tn = theano.grad(
@@ -372,30 +364,32 @@ def build_training(discriminator, generator, d_specs, g_specs):
 
     return d_train_fn, g_train_fn
 
-print("build discriminator")
+print("Build discriminator")
 discriminator = build_discriminator(d_specs)
 
-print("build generator")
+print("Build generator")
 generator = build_generator_lstm(g_specs, arch=arch)
 
-print("build training")
+print("Build training")
 d_train_fn, g_train_fn = build_training(
     discriminator, generator, d_specs, g_specs)
 
-# D(x)
-data_iter = sample_data(data_dict, d_batch_size, min_len, max_len)
+print("Create data iterator")
+data_iter = sample_data(dataset, d_batch_size, min_len, max_len,
+                        single_len=single_len)
 
 # pre training variables
-n_d_iterations_pre = d_specs.get('iterations_pre', 0)
 d_losses_pre = []
+n_d_iterations_pre = 0
 
 # training variables
 d_losses = []
 g_losses = []
-n_iterations = int(5e4)
+n_iterations = 1
 n_d_iterations = 5
 n_g_iterations = 1
-epoch = 100
+epoch = len(dataset) / d_batch_size
+print("Epoch has {} samples".format(epoch))
 
 folderpath = (
     'piano_multistep_lstm_gan_pre{}'
@@ -411,7 +405,7 @@ if not os.path.exists(os.path.join('images', folderpath)):
     os.makedirs(os.path.join('images', folderpath))
 
 # pre training loop
-print("pre-training")
+print("Pre-training")
 for i in range(n_d_iterations_pre):
     # use same data for discriminator and generator
     d_X, d_C, d_M = data_iter.next()
@@ -445,10 +439,10 @@ for i in range(n_d_iterations_pre):
         plt.close('all')
 
 # training loop
-print("training")
+print("Training")
 for iteration in tqdm(range(n_iterations)):
     for i in range(n_d_iterations):
-        # load data
+        # load mini-batch
         d_X, d_C, d_M = data_iter.next()
         g_C, g_M = d_C, d_M
         g_Z = np.random.normal(size=g_specs['noise_shape']).astype('float32')
@@ -459,13 +453,13 @@ for iteration in tqdm(range(n_iterations)):
             d_X += np.random.normal(0, 1, size=d_X.shape)
         else:
             g_X = d_X
-
+        pdb.set_trace()
         d_loss, d_x_loss, d_g_z_loss, d_x, d_g_z, g_z = d_train_fn(
             d_X, d_M, g_X, g_Z, g_C, g_M)
         d_losses.append(d_loss)
 
     for i in range(n_g_iterations):
-        # load data
+        # load mini-batch
         d_X, d_C, d_M = data_iter.next()
         g_X, g_C, g_M = d_X, d_C, d_M
         g_Z = np.random.normal(size=g_specs['noise_shape']).astype('float32')
