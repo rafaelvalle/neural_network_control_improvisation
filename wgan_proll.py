@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-Example employing Lasagne for digit generation using the MNIST dataset and
+Example employing Lasagne for piano roll using the MIDI files from classical
+piano music and
 Wasserstein Generative Adversarial Networks
 (WGANs, see https://arxiv.org/abs/1701.07875 for the paper and
 https://github.com/martinarjovsky/WassersteinGAN for the "official" code).
@@ -12,7 +13,7 @@ https://gist.github.com/f0k/738fa2eedd9666b78404ed1751336f56
 This, in turn, is based on the MNIST example in Lasagne:
 https://lasagne.readthedocs.io/en/latest/user/tutorial.html
 
-Jan Schlüter, 2017-02-02
+Adapted from Jan Schlüter's example
 """
 
 from __future__ import print_function
@@ -31,11 +32,6 @@ import matplotlib.pyplot as plt
 
 import pdb
 
-
-# ##################### Build the neural network model #######################
-# We create two models: The generator and the critic network.
-# The models are the same as in the Lasagne DCGAN example, except that the
-# discriminator is now a critic with linear output instead of sigmoid output.
 
 def build_generator(input_var=None):
     from lasagne.layers import InputLayer, ReshapeLayer, DenseLayer
@@ -125,8 +121,8 @@ def main(num_epochs=1000, epochsize=100, batchsize=64, initial_eta=1e-2,
     n_pieces = 0  # 0 is equal to all pieces, unbalanced dataset
     crop = None  # crop = (32, 96)
     as_dict = False
-    dataset = load_data(datapath, glob_file_str, n_pieces, crop, as_dict,
-                        patch_size=128)
+    inputs, labels = load_data(datapath, glob_file_str, n_pieces, crop, as_dict,
+                               patch_size=128)
 
     # Prepare Theano variables for inputs
     noise_var = T.matrix('noise')
@@ -183,7 +179,7 @@ def main(num_epochs=1000, epochsize=100, batchsize=64, initial_eta=1e-2,
     # Finally, launch the training loop.
     print("Starting training...")
     # We create an infinite supply of batches (as an iterable generator):
-    batches = iterate_minibatches(dataset, batchsize, shuffle=True,
+    batches = iterate_minibatches(inputs, batchsize, shuffle=True,
                                   length=0, forever=True)
     # We iterate over epochs:
     generator_updates = 0
