@@ -29,6 +29,8 @@ import lasagne
 from data_processing import load_data
 import matplotlib.pyplot as plt
 
+import pdb
+
 
 # ##################### Build the neural network model #######################
 # We create two models: The generator and the critic network.
@@ -53,12 +55,12 @@ def build_generator(input_var=None):
     # fully-connected layer
     layer = batch_norm(DenseLayer(layer, 1024))
     # project and reshape
-    layer = batch_norm(DenseLayer(layer, 128*16*16))
-    layer = ReshapeLayer(layer, ([0], 128, 16, 16))
+    layer = batch_norm(DenseLayer(layer, 128*32*32))
+    layer = ReshapeLayer(layer, ([0], 128, 32, 32))
     # two fractional-stride convolutions
-    layer = batch_norm(Deconv2DLayer(layer, 64, 5, stride=2, crop='same',
-                                     output_size=32))
-    layer = Deconv2DLayer(layer, 1, 5, stride=2, crop='same', output_size=64,
+    layer = batch_norm(Deconv2DLayer(layer, 128, 5, stride=2, crop='same',
+                                     output_size=64))
+    layer = Deconv2DLayer(layer, 1, 5, stride=2, crop='same', output_size=128,
                           nonlinearity=sigmoid)
     print("Generator output:", layer.output_shape)
     return layer
@@ -73,7 +75,7 @@ def build_critic(input_var=None):
     from lasagne.nonlinearities import LeakyRectify
     lrelu = LeakyRectify(0.2)
     # input: (None, 1, 28, 28)
-    layer = InputLayer(shape=(None, 1, 64, 64), input_var=input_var)
+    layer = InputLayer(shape=(None, 1, 128, 128), input_var=input_var)
     # two convolutions
     layer = batch_norm(Conv2DLayer(layer, 64, 5, stride=2, pad='same',
                                    nonlinearity=lrelu))
@@ -88,7 +90,7 @@ def build_critic(input_var=None):
 
 
 def iterate_minibatches(inputs, batchsize, shuffle=True, forever=False,
-                        length=64):
+                        length=128):
     if shuffle:
         indices = np.arange(len(inputs))
     while True:
@@ -100,11 +102,15 @@ def iterate_minibatches(inputs, batchsize, shuffle=True, forever=False,
             else:
                 excerpt = slice(start_idx, start_idx + batchsize)
 
-            data = []
-            # select random slice from each piano roll
-            for i in excerpt:
-                rand_start = np.random.randint(0, len(inputs[i]) - length)
-                data.append(inputs[i][rand_start:rand_start+length])
+            if length > 0:
+                data = []
+                # select random slice from each piano roll
+                for i in excerpt:
+                    rand_start = np.random.randint(0, len(inputs[i]) - length)
+                    data.append(inputs[i][rand_start:rand_start+length])
+            else:
+                data = inputs[excerpt]
+
             yield lasagne.utils.floatX(np.array(data))
         if not forever:
             break
@@ -117,9 +123,10 @@ def main(num_epochs=1000, epochsize=100, batchsize=64, initial_eta=1e-2,
     datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Piano'
     glob_file_str = '*.npy'
     n_pieces = 0  # 0 is equal to all pieces, unbalanced dataset
-    crop = (32, 96)
+    crop = None  # crop = (32, 96)
     as_dict = False
-    dataset = load_data(datapath, glob_file_str, n_pieces, crop, as_dict)
+    dataset = load_data(datapath, glob_file_str, n_pieces, crop, as_dict,
+                        patch_size=128)
 
     # Prepare Theano variables for inputs
     noise_var = T.matrix('noise')
@@ -177,7 +184,7 @@ def main(num_epochs=1000, epochsize=100, batchsize=64, initial_eta=1e-2,
     print("Starting training...")
     # We create an infinite supply of batches (as an iterable generator):
     batches = iterate_minibatches(dataset, batchsize, shuffle=True,
-                                  forever=True)
+                                  length=0, forever=True)
     # We iterate over epochs:
     generator_updates = 0
     for epoch in range(num_epochs):
@@ -212,9 +219,9 @@ def main(num_epochs=1000, epochsize=100, batchsize=64, initial_eta=1e-2,
         # And finally, we plot some generated data
         samples = gen_fn(lasagne.utils.floatX(np.random.rand(42, 100)))
         plt.imsave('images/wgan_proll/wgan_epoch{}.png'.format(epoch),
-                   (samples.reshape(6, 7, 64, 64)
+                   (samples.reshape(6, 7, 128, 128)
                            .transpose(0, 2, 1, 3)
-                           .reshape(6*64, 7*64)).T,
+                           .reshape(6*128, 7*128)).T,
                    cmap='gray')
 
         # After half the epochs, we start decaying the learn rate towards zero
