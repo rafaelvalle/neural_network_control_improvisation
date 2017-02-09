@@ -157,14 +157,20 @@ def main(num_epochs=200, initial_eta=1e-4):
     updates.update(lasagne.updates.adam(
             discriminator_loss, discriminator_params, learning_rate=eta, beta1=0.5))
 
+    # Instantiate a symbolic noise generator to use for training
+    from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+    srng = RandomStreams(seed=np.random.randint(2147462579, size=6))
+    noise = srng.uniform((batchsize, 100))
+
     # Compile a function performing a training step on a mini-batch (by giving
     # the updates dictionary) and returning the corresponding training loss:
-    train_fn = theano.function([noise_var, input_var],
+    train_fn = theano.function([input_var],
                                [(real_out > .5).mean(), (fake_out < .5).mean()],
+                               givens={noise_var: noise,
                                updates=updates)
 
-    # Compile another function generating some data
 
+    # Compile another function generating some data
     gen_fn = theano.function([noise_var],
                              lasagne.layers.get_output(generator,
                                                        deterministic=True))
@@ -180,8 +186,7 @@ def main(num_epochs=200, initial_eta=1e-4):
             # reshape batch to proper dimensions
             batch = batch.reshape(
                 (batch.shape[0], 1, batch.shape[1], batch.shape[2]))
-            noise = lasagne.utils.floatX(np.random.rand(len(batch), noise_size))
-            train_err += np.array(train_fn(noise, batch))
+            train_err += np.array(train_fn(batch))
             train_batches += 1
 
 
