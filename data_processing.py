@@ -6,10 +6,12 @@ import pdb
 
 
 def load_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
-              scale=True, patch_size=False, with_labels=False):
-    data = []
-    if as_dict:
-        data = defaultdict(list)
+              scale=True, patch_size=False):
+    
+    data = defaultdict(list)
+    if not as_dict:
+        data = []
+        labels = []
 
     for folderpath in glob.glob(os.path.join(datapath, '*/')):
         composer = os.path.basename(os.path.normpath(folderpath))
@@ -31,14 +33,16 @@ def load_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
                 ids = np.arange(0, len(cur_data) - patch_size, patch_size)
                 cur_data = np.array([
                     cur_data[ids[i-1]:ids[i]] for i in range(1, len(ids))])
-            if as_dict:
-                data[composer].append(cur_data)
-            elif patch_size and not with_labels:
-                data.extend(cur_data)
-            elif with_labels:
-                data.extend([cur_data, composer])
+            if not as_dict:                
+                if patch_size:
+                    data.extend(cur_data)
+                    labels.extend([composer] * len(cur_data))
+                else:
+                    data.append(cur_data)
+                    labels.extend(composer)
             else:
-                data.append(cur_data)
+                data[composer].append(cur_data)
     if not as_dict:
-        data = np.array(data)
+        return np.array(data), np.array(labels)
+    
     return data
