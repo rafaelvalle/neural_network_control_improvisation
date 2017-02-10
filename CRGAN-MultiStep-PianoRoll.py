@@ -1,12 +1,14 @@
 import matplotlib
 matplotlib.use('Agg')
+matplotlib.rcParams['axes.xmargin'] = 0.1
+matplotlib.rcParams['axes.ymargin'] = 0.1
 import matplotlib.pylab as plt
+plt.style.use('ggplot')
 plt.ioff()
 import os
 import functools
 from collections import defaultdict
 import numpy as np
-import seaborn as sbn
 import theano
 import theano.tensor as T
 import lasagne
@@ -16,17 +18,17 @@ from data_processing import load_data
 import pdb
 
 # data params
-datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Piano'
+datapath = '/Users/rafaelvalle/Desktop/datasets/MIDI/Piano'
 glob_file_str = '*.npy'
-n_pieces = 0  # 0 is equal to all pieces, unbalanced dataset
-crop = (32, 96)
+n_pieces = 8  # 0 is equal to all pieces, unbalanced dataset
+crop = None  # (32, 96)
 as_dict = True
 
-# load data
+# load data, takes time depending on dataset site
 dataset = load_data(datapath, glob_file_str, n_pieces, crop, as_dict)
 
 # model params
-d_batch_size = g_batch_size = 256
+d_batch_size = g_batch_size = 64
 n_timesteps = 100  # 200 ms per step
 min_len = 50
 max_len = 100
@@ -35,7 +37,7 @@ n_features = dataset[dataset.keys()[0]][0].shape[1]
 n_conditions = len(dataset.keys())
 temperature = 1.
 n_units_d = 8
-n_units_g = 8
+n_units_g = 16
 arch = 1
 
 
@@ -67,8 +69,8 @@ if arch == 1:
                    lasagne.nonlinearities.rectify,  # feedforward
                    lasagne.nonlinearities.rectify,  # feedbackward
                    sigmoid_temperature),  # sigmoid with temperature
-               'learning_rate': 0.001,
-               'regularization': 1e-4,
+               'learning_rate': 1e-4,
+               'regularization': 1e-5,
                'unroll': 0,
                }
 
@@ -87,7 +89,7 @@ if arch == 1:
                    lasagne.nonlinearities.rectify,  # forw and backward noise
                    lasagne.nonlinearities.rectify,  # data and noise lstm concat
                    lasagne.nonlinearities.tanh),
-               'learning_rate': 0.001
+               'learning_rate': 1e-4
                }
 elif arch == 2:
     raise Exception("arch 2 not implemented")
@@ -243,33 +245,31 @@ def sample_data(data, batch_size, min_len, max_len, clip=False,
         encoding[k] = i
         i += 1
 
-    pieces_per_lbl = int(batch_size / len(data.keys()))
-
     while True:
         inputs, conds, masks = [], [], []
         if single_len:
             # same length within batch
             mask_size = np.random.randint(min_len, max_len)
-        for k, lbl in encoding.items():
-            pieces = np.random.choice(data[k], pieces_per_lbl)
-            for piece in pieces:
-                start_idx = np.random.randint(0, piece.shape[0] - max_len - 1)
-                piece_data = piece[start_idx: start_idx+max_len]
-                if not single_len:
-                    # different lengths within batch
-                    mask_size = np.random.randint(min_len, max_len)
-                if clip:
-                    piece_data[mask_size:] = 0
 
-                cond = np.zeros((max_len, len(encoding)), dtype=np.float32)
-                cond[:, encoding[k]] = 1
+        for composer in np.random.choice(data.keys(), batch_size):
+            piece = np.random.choice(data[composer])
+            start_idx = np.random.randint(0, piece.shape[0] - max_len - 1)
+            piece_data = piece[start_idx: start_idx+max_len]
+            if not single_len:
+                # different lengths within batch
+                mask_size = np.random.randint(min_len, max_len)
+            if clip:
+                piece_data[mask_size:] = 0
 
-                mask = np.zeros(max_len, dtype=np.int32)
-                mask[:mask_size] = 1
+            cond = np.zeros((max_len, len(encoding)), dtype=np.float32)
+            cond[:, encoding[k]] = 1
 
-                inputs.append(piece_data)
-                conds.append(cond)
-                masks.append(mask)
+            mask = np.zeros(max_len, dtype=np.int32)
+            mask[:mask_size] = 1
+
+            inputs.append(piece_data)
+            conds.append(cond)
+            masks.append(mask)
 
         shuffle_ids = np.random.randint(0, len(inputs), len(inputs))
         inputs = np.array(inputs, dtype=np.float32)[shuffle_ids]
@@ -279,14 +279,25 @@ def sample_data(data, batch_size, min_len, max_len, clip=False,
         yield inputs, conds, masks
 
 
-def build_training(discriminator, generator, d_specs, g_specs):
+def build_training(discriminator, generator, d_specs, g_specs, add_noise=True):
+    # Instantiate a symbolic noise generator to use for training
+    from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+    srng = RandomStreams(seed=np.random.randint(2147462579, size=6))
+    noise = srng.normal(size=g_specs['noise_shape'], avg=0.0, std=1.0)
+
+    lbl_noise = [0.0] * 3
+    if add_noise:
+        print("  adding label noise")
+        lbl_noise = srng.normal(size=(3,), avg=0.0, std=0.1)
+
+    # model params
     d_params = lasagne.layers.get_all_params(discriminator.l_out, trainable=True)
     g_params = lasagne.layers.get_all_params(generator.l_out, trainable=True)
 
     # G(z)
     g_z = lasagne.layers.get_output(generator.l_out,
                                     inputs={generator.l_in: g_in_D,
-                                            generator.l_noise: g_in_Z,
+                                            generator.l_noise: noise,
                                             generator.l_cond: g_in_C,
                                             generator.l_mask: g_in_M})
 
@@ -301,13 +312,13 @@ def build_training(discriminator, generator, d_specs, g_specs):
                                             discriminator.l_mask: d_in_M})
     # loss functions
     g_loss = lasagne.objectives.binary_crossentropy(
-        T.clip(d_g_z, 1e-7, 1.0 - 1e-7), 0.95)
+        T.clip(d_g_z, 1e-7, 1.0 - 1e-7), 1.0 + lbl_noise[0])
     g_loss = g_loss.mean()
 
     d_x_loss = lasagne.objectives.binary_crossentropy(
-        T.clip(d_x, 1e-7, 1.0 - 1e-7), 0.95)
+        d_x, 1.0 + lbl_noise[1])
     d_g_z_loss = lasagne.objectives.binary_crossentropy(
-        T.clip(d_g_z, 1e-7, 1.0 - 1e-7), 0.05)
+        d_g_z, 0.0 + lbl_noise[2])
 
     d_loss = d_x_loss + d_g_z_loss
     d_loss = d_loss.mean()
@@ -323,26 +334,30 @@ def build_training(discriminator, generator, d_specs, g_specs):
                                       non_sequences=[d_in_X, d_in_M, g_z])
         g_loss0 = theano.clone(g_loss, replace=updates)
         g_updates = lasagne.updates.adam(
-            g_loss0, g_params, g_specs['learning_rate'])
+            g_loss0, g_params, g_specs['learning_rate'], beta1=0.5)
     else:
         g_updates = lasagne.updates.adam(
-            g_loss, g_params, g_specs['learning_rate'])
+            g_loss, g_params, g_specs['learning_rate'], beta1=0.5)
+
+    # objective function
+    acc_d_x = (d_x > .5).mean()
+    acc_d_g_z = (d_g_z < .5).mean()
 
     # training functions
     d_train_fn = theano.function(
-        inputs=[d_in_X, d_in_M, g_in_D, g_in_Z, g_in_C, g_in_M],
-        outputs=[d_loss, d_x_loss, d_g_z_loss, d_x, d_g_z, g_z],
+        inputs=[d_in_X, d_in_M, g_in_D, g_in_C, g_in_M],
+        outputs=[d_loss, d_x_loss, d_g_z_loss, d_x, d_g_z, acc_d_x, acc_d_g_z],
         updates=d_updates,
         name='d_train')
     if d_specs.get('unroll', 0):
         g_train_fn = theano.function(
-            inputs=[g_in_D, g_in_Z, g_in_C, g_in_M, d_in_M, d_in_X],
+            inputs=[g_in_D, g_in_C, g_in_M, d_in_M, d_in_X],
             outputs=g_loss,
             updates=g_updates,
             name='g_train_unroll')
     else:
         g_train_fn = theano.function(
-            inputs=[g_in_D, g_in_Z, g_in_C, g_in_M],
+            inputs=[g_in_D, g_in_C, g_in_M],
             outputs=g_loss,
             updates=g_updates,
             name='g_train')
@@ -362,7 +377,20 @@ def build_training(discriminator, generator, d_specs, g_specs):
         outputs=d_x)
     """
 
-    return d_train_fn, g_train_fn
+    # accuracy functions
+    d_acc_fn = theano.function(
+        inputs=[d_in_X, d_in_M],
+        outputs=acc_d_x)
+
+    # sampling function
+    g_sample_fn = theano.function(
+        inputs=[g_in_D, g_in_Z, g_in_C, g_in_M],
+        outputs=lasagne.layers.get_output(generator.l_out,
+                                          inputs={generator.l_in: g_in_D,
+                                                  generator.l_noise: g_in_Z,
+                                                  generator.l_cond: g_in_C,
+                                                  generator.l_mask: g_in_M}))
+    return d_train_fn, g_train_fn, g_sample_fn, d_acc_fn
 
 print("Build discriminator")
 discriminator = build_discriminator(d_specs)
@@ -371,7 +399,7 @@ print("Build generator")
 generator = build_generator_lstm(g_specs, arch=arch)
 
 print("Build training")
-d_train_fn, g_train_fn = build_training(
+d_train_fn, g_train_fn, g_sample_fn, d_acc_fn = build_training(
     discriminator, generator, d_specs, g_specs)
 
 print("Create data iterator")
@@ -379,16 +407,17 @@ data_iter = sample_data(dataset, d_batch_size, min_len, max_len,
                         single_len=single_len)
 
 # pre training variables
-d_losses_pre = []
-n_d_iterations_pre = 0
+n_d_iterations_pre = 2
 
 # training variables
 d_losses = []
 g_losses = []
-n_iterations = 1
-n_d_iterations = 5
+d_acc_x = []
+d_acc_g_z = []
+n_iterations = 5000
+n_d_iterations = 1
 n_g_iterations = 1
-epoch = len(dataset) / d_batch_size
+epoch = 100
 print("Epoch has {} samples".format(epoch))
 
 folderpath = (
@@ -405,38 +434,43 @@ if not os.path.exists(os.path.join('images', folderpath)):
     os.makedirs(os.path.join('images', folderpath))
 
 # pre training loop
-print("Pre-training")
+print("Pre-training {} iterations".format(n_d_iterations_pre))
 for i in range(n_d_iterations_pre):
     # use same data for discriminator and generator
     d_X, d_C, d_M = data_iter.next()
     g_X, g_C, g_M = d_X, d_C, d_M
 
-    # gaussian(spherical) noise
-    g_Z = np.random.normal(size=g_specs['noise_shape']).astype('float32')
+    d_loss, d_x_loss, d_g_z_loss, d_x, d_g_z, acc_d_x, acc_d_g_z = d_train_fn(
+        d_X, d_M, g_X, g_C, g_M)
+    d_losses.append(d_loss)
+    d_acc_x.append(acc_d_x)
+    d_acc_g_z.append(acc_d_g_z)
 
-    d_loss, d_x_loss, d_g_z_loss, d_x, d_g_z, g_z = d_train_fn(
-        d_X, d_M, g_X, g_Z, g_C, g_M)
-    d_losses_pre.append(d_loss)
 
     if i == (n_d_iterations_pre - 1):
-        fig, axes = plt.subplots(4, 2, figsize=(12, 15))
-        axes[0, 0].set_title('D(x)')
-        sbn.heatmap(d_x.T, ax=axes[0, 0])
-        axes[0, 1].set_title('D(G(z))')
-        sbn.heatmap(d_g_z.T, ax=axes[0, 1])
-
-        axes[1, 0].set_title('G(z) : 0')
-        axes[1, 1].set_title('G(z) : 1')
-        axes[2, 0].set_title('G(z) : 2')
-        axes[2, 1].set_title('G(z) : 3')
-        sbn.heatmap(g_z[0].T, ax=axes[1, 0]).invert_yaxis()
-        sbn.heatmap(g_z[1].T, ax=axes[1, 1]).invert_yaxis()
-        sbn.heatmap(g_z[2].T, ax=axes[2, 0]).invert_yaxis()
-        sbn.heatmap(g_z[3].T, ax=axes[2, 1]).invert_yaxis()
-        axes[3, 0].set_title('Loss(d)')
-        axes[3, 0].plot(d_losses_pre)
+        fig, axes = plt.subplots(4, 1, figsize=(3, 6))
+        axes[0].set_title('D(x)')
+        axes[0].imshow(d_x, aspect='auto', interpolation=None, cmap='gray')
+        axes[1].set_title('D(G(z))')
+        axes[1].imshow(d_g_z, aspect='auto', interpolation=None, cmap='gray')
+        axes[2].set_title('Loss(d)')
+        axes[2].plot(d_losses)
+        axes[3].set_title('Accuracy D(x) and D(G(z))')
+        axes[3].plot(d_acc_x, color='blue')
+        axes[3].plot(d_acc_g_z, color='red')
+        fig.tight_layout()
         fig.savefig('images/{}/pretraining'.format(folderpath))
+        noise = lasagne.utils.floatX(np.random.normal(size=g_specs['noise_shape']))
+        samples = g_sample_fn(d_X, noise, d_C, d_M)
+
+        plt.imsave('images/{}/pretraining_samples.png'.format(folderpath),
+                   (samples.reshape(8, 8, max_len, n_features)
+                           .transpose(0, 2, 1, 3)
+                           .reshape(8*max_len, 8*n_features)).T,
+                   cmap='gray',
+                   origin='bottom')
         plt.close('all')
+
 
 # training loop
 print("Training")
@@ -445,7 +479,6 @@ for iteration in tqdm(range(n_iterations)):
         # load mini-batch
         d_X, d_C, d_M = data_iter.next()
         g_C, g_M = d_C, d_M
-        g_Z = np.random.normal(size=g_specs['noise_shape']).astype('float32')
 
         # randomly add noise to d_X
         if (np.random.random() > 0.66):
@@ -453,55 +486,49 @@ for iteration in tqdm(range(n_iterations)):
             d_X += np.random.normal(0, 1, size=d_X.shape)
         else:
             g_X = d_X
-        pdb.set_trace()
-        d_loss, d_x_loss, d_g_z_loss, d_x, d_g_z, g_z = d_train_fn(
-            d_X, d_M, g_X, g_Z, g_C, g_M)
-        d_losses.append(d_loss)
+
+    d_loss, d_x_loss, d_g_z_loss, d_x, d_g_z, acc_d_x, acc_d_g_z = d_train_fn(
+        d_X, d_M, g_X, g_C, g_M)
+    d_losses.append(d_loss)
+    d_acc_x.append(acc_d_x)
+    d_acc_g_z.append(acc_d_g_z)
 
     for i in range(n_g_iterations):
         # load mini-batch
         d_X, d_C, d_M = data_iter.next()
         g_X, g_C, g_M = d_X, d_C, d_M
-        g_Z = np.random.normal(size=g_specs['noise_shape']).astype('float32')
 
         # train iteration
         if d_specs.get('unroll'):
-            g_loss = g_train_fn(g_X, g_Z, g_C, g_M, d_M, d_X)
+            g_loss = g_train_fn(g_X, g_C, g_M, d_M, d_X)
         else:
-            g_loss = g_train_fn(g_X, g_Z, g_C, g_M)
+            g_loss = g_train_fn(g_X, g_C, g_M)
         g_losses.append(g_loss)
 
     if iteration % epoch == 0:
-        fig, axes = plt.subplots(6, 2, figsize=(32, 32))
-        axes[0, 0].set_title('D(x)')
-        sbn.heatmap(d_x.T, ax=axes[0, 0])
-        axes[0, 1].set_title('D(G(z))')
-        sbn.heatmap(d_g_z.T, ax=axes[0, 1])
+        fig, axes = plt.subplots(5, 1, figsize=(4, 8))
+        axes[0].set_title('D(x)')
+        axes[0].imshow(d_x, aspect='auto', interpolation=None, cmap='gray')
+        axes[1].set_title('D(G(z))')
+        axes[1].imshow(d_g_z, aspect='auto', interpolation=None, cmap='gray')
+        axes[2].set_title('Loss(d)')
+        axes[2].plot(d_losses)
+        axes[3].set_title('Loss(g)')
+        axes[3].plot(g_losses)
+        axes[4].set_title('Accuracy D(x) D(G(z)')
+        axes[4].plot(d_acc_x, color='blue')
+        axes[4].plot(d_acc_g_z, color='red')
+        fig.tight_layout()
+        fig.savefig('images/{}/iteration{}'.format(folderpath, iteration))
 
-        axes[1, 0].set_title('D : 0')
-        axes[2, 0].set_title('D : 1')
-        axes[3, 0].set_title('D : 2')
-        axes[4, 0].set_title('D : 3')
-        axes[1, 1].set_title('G(z) : 0')
-        axes[2, 1].set_title('G(z) : 1')
-        axes[3, 1].set_title('G(z) : 2')
-        axes[4, 1].set_title('G(z) : 3')
+        noise = lasagne.utils.floatX(np.random.normal(size=g_specs['noise_shape']))
+        samples = g_sample_fn(d_X, noise, d_C, d_M)
+        plt.imsave('images/{}/iteration{}_samples.png'.format(folderpath, iteration),
+                   (samples.reshape(8, 8, max_len, n_features)
+                           .transpose(0, 2, 1, 3)
+                           .reshape(8*max_len, 8*n_features)).T,
+                   cmap='gray',
+                   origin='bottom')
 
-        sbn.heatmap(g_X[0].T, ax=axes[1, 0]).invert_yaxis()
-        sbn.heatmap(g_X[1].T, ax=axes[2, 0]).invert_yaxis()
-        sbn.heatmap(g_X[2].T, ax=axes[3, 0]).invert_yaxis()
-        sbn.heatmap(g_X[3].T, ax=axes[4, 0]).invert_yaxis()
-
-        sbn.heatmap(g_z[0].T, ax=axes[1, 1]).invert_yaxis()
-        sbn.heatmap(g_z[1].T, ax=axes[2, 1]).invert_yaxis()
-        sbn.heatmap(g_z[2].T, ax=axes[3, 1]).invert_yaxis()
-        sbn.heatmap(g_z[3].T, ax=axes[4, 1]).invert_yaxis()
-
-        axes[5, 0].set_title('Loss(d)')
-        axes[5, 0].plot(d_losses)
-        axes[5, 1].set_title('Loss(g)')
-        axes[5, 1].plot(g_losses)
-
-        fig.savefig('images/{}/iteration_{}'.format(folderpath, iteration))
         plt.close('all')
         display.clear_output(wait=True)
