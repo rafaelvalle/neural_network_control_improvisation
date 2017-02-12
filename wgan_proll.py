@@ -3,17 +3,13 @@
 
 """
 Example employing Lasagne for piano roll using the MIDI files from classical
-piano music and
+piano music
 Wasserstein Generative Adversarial Networks
 (WGANs, see https://arxiv.org/abs/1701.07875 for the paper and
 https://github.com/martinarjovsky/WassersteinGAN for the "official" code).
 
-It is based on a DCGAN example:
-https://gist.github.com/f0k/738fa2eedd9666b78404ed1751336f56
-This, in turn, is based on the MNIST example in Lasagne:
-https://lasagne.readthedocs.io/en/latest/user/tutorial.html
-
-Adapted from Jan Schlüter's example
+Adapted from Jan Schlüter's code
+https://gist.github.com/f0k/f3190ebba6c53887d598d03119ca2066
 """
 
 from __future__ import print_function
@@ -226,8 +222,8 @@ def main(num_epochs=1000, epochsize=100, batchsize=64, initial_eta=1e-2,
             eta.set_value(lasagne.utils.floatX(initial_eta*2*(1 - progress)))
 
     # Optionally, you could now dump the network weights to a file like this:
-    # np.savez('wgan_mnist_gen.npz', *lasagne.layers.get_all_param_values(generator))
-    # np.savez('wgan_mnist_crit.npz', *lasagne.layers.get_all_param_values(critic))
+    # np.savez('wgan_proll_gen.npz', *lasagne.layers.get_all_param_values(generator))
+    # np.savez('wgan_proll_crit.npz', *lasagne.layers.get_all_param_values(critic))
     #
     # And load them again later on like this:
     # with np.load('model.npz') as f:
@@ -237,7 +233,7 @@ def main(num_epochs=1000, epochsize=100, batchsize=64, initial_eta=1e-2,
 
 if __name__ == '__main__':
     if ('--help' in sys.argv) or ('-h' in sys.argv):
-        print("Trains a WGAN on MNIST using Lasagne.")
+        print("Trains a WGAN on Piano Rolls using Lasagne.")
         print("Usage: %s [EPOCHS [EPOCHSIZE]]" % sys.argv[0])
         print()
         print("EPOCHS: number of training epochs to perform (default: 1000)")
