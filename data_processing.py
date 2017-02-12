@@ -7,7 +7,7 @@ import pdb
 
 def load_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
               scale=True, patch_size=False):
-    
+
     data = defaultdict(list)
     if not as_dict:
         data = []
@@ -33,7 +33,7 @@ def load_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
                 ids = np.arange(0, len(cur_data) - patch_size, patch_size)
                 cur_data = np.array([
                     cur_data[ids[i-1]:ids[i]] for i in range(1, len(ids))])
-            if not as_dict:                
+            if not as_dict:
                 if patch_size:
                     data.extend(cur_data)
                     labels.extend([composer] * len(cur_data))
@@ -44,5 +44,5 @@ def load_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
                 data[composer].append(cur_data)
     if not as_dict:
         return np.array(data), np.array(labels)
-    
+
     return data
