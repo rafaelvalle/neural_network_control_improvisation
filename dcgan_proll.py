@@ -1,6 +1,17 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+"""
+Example employing Lasagne for piano roll using the MIDI files from classical
+piano music
+Wasserstein Generative Adversarial Networks
+(WGANs, see https://arxiv.org/abs/1701.07875 for the paper and
+https://github.com/martinarjovsky/WassersteinGAN for the "official" code).
+
+Adapted from Jan Schlüter's code
+https://gist.github.com/f0k/738fa2eedd9666b78404ed1751336f56
+"""
+
 from __future__ import print_function
 
 import sys
@@ -54,35 +65,69 @@ class Deconv2DLayer(lasagne.layers.Layer):
         return self.nonlinearity(conved)
 
 
-def build_generator(input_var=None):
+def build_generator(input_var=None, convs=0):
     from lasagne.layers import InputLayer, ReshapeLayer, DenseLayer, batch_norm
     from lasagne.nonlinearities import sigmoid
     # noise input
     layer = InputLayer(shape=(None, noise_size), input_var=input_var)
-    # fully-connected layer
-    layer = batch_norm(DenseLayer(layer, 1024))
-    # project and reshape
-    layer = batch_norm(DenseLayer(layer, 128*16*16))
-    layer = ReshapeLayer(layer, ([0], 128, 16, 16))
-    # two fractional-stride convolutions
-    layer = batch_norm(Deconv2DLayer(layer, 64, 5, stride=2, pad=2))
+    if convs == 0:
+        # fully-connected layer
+        layer = batch_norm(DenseLayer(layer, 1024))
+        # project and reshape
+        layer = batch_norm(DenseLayer(layer, 128*16*16))
+        layer = ReshapeLayer(layer, ([0], 128, 16, 16))
+        # two fractional-stride convolutions
+        layer = batch_norm(Deconv2DLayer(layer, 64, 5, stride=2, pad=2))
+    elif convs == 2:
+        layer = InputLayer(shape=(None, noise_size), input_var=input_var)
+        layer = batch_norm(DenseLayer(layer, 1024))
+        layer = batch_norm(DenseLayer(layer, 128*32*32))
+        layer = ReshapeLayer(layer, ([0], 128, 32, 32))
+        layer = batch_norm(Deconv2DLayer(layer, 128, 5, stride=2, pad=2))
+    elif convs == 3:
+        layer = InputLayer(shape=(None, noise_size), input_var=input_var)
+        layer = batch_norm(DenseLayer(layer, 1024))
+        layer = batch_norm(DenseLayer(layer, 128*16*16))
+        layer = ReshapeLayer(layer, ([0], 128, 16, 16))
+        layer = batch_norm(Deconv2DLayer(layer, 64, 5, stride=2, pad=2))
+        layer = batch_norm(Deconv2DLayer(layer, 32, 5, stride=2, pad=2))
+    elif convs == 4:
+        # project and reshape
+        layer = batch_norm(DenseLayer(layer, 1024*4*4))
+        layer = ReshapeLayer(layer, ([0], 1024, 4, 4))
+        # four fractional-stride convolutions
+        layer = batch_norm(Deconv2DLayer(layer, 512, 5, stride=2, pad=2))
+        layer = batch_norm(Deconv2DLayer(layer, 256, 5, stride=2, pad=2))
+        layer = batch_norm(Deconv2DLayer(layer, 128, 5, stride=2, pad=2))
+        layer = batch_norm(Deconv2DLayer(layer, 64, 5, stride=2, pad=2))
+
     layer = Deconv2DLayer(layer, 1, 5, stride=2, pad=2, nonlinearity=sigmoid)
     print("Generator output:", layer.output_shape)
+
     return layer
 
 
-def build_discriminator(input_var=None):
+def build_discriminator(input_var=None, convs=0):
     from lasagne.layers import (InputLayer, DenseLayer, batch_norm)
     from lasagne.layers.dnn import Conv2DDNNLayer as Conv2DLayer  # override
     from lasagne.nonlinearities import LeakyRectify, sigmoid
     lrelu = LeakyRectify(0.2)
-    # input: (None, 1, 64, 64)
-    layer = InputLayer(shape=(None, 1, 64, 64), input_var=input_var)
-    # two convolutions
-    layer = batch_norm(
-        Conv2DLayer(layer, 64, 5, stride=2, pad=2, nonlinearity=lrelu))
-    layer = batch_norm(
-        Conv2DLayer(layer, 128, 5, stride=2, pad=2, nonlinearity=lrelu))
+    if convs == 0:
+        # input: (None, 1, 64, 64)
+        layer = InputLayer(shape=(None, 1, 64, 64), input_var=input_var)
+        # two convolutions
+        layer = batch_norm(
+            Conv2DLayer(layer, 64, 5, stride=2, pad=2, nonlinearity=lrelu))
+        layer = batch_norm(
+            Conv2DLayer(layer, 128, 5, stride=2, pad=2, nonlinearity=lrelu))
+    else:
+        # input: (None, 1, 128, 128)
+        layer = InputLayer(shape=(None, 1, 128, 128), input_var=input_var)
+        # two convolutions
+        layer = batch_norm(
+            Conv2DLayer(layer, 64, 5, stride=2, pad=2, nonlinearity=lrelu))
+        layer = batch_norm(
+            Conv2DLayer(layer, 128, 5, stride=2, pad=2, nonlinearity=lrelu))
     # fully-connected layer
     layer = batch_norm(DenseLayer(layer, 1024, nonlinearity=lrelu))
     # output layer
@@ -114,27 +159,31 @@ def iterate_minibatches(inputs, batchsize, length=64, shuffle=True,
             break
 
 
-def main(num_epochs=200, initial_eta=1e-4):
+def main(num_epochs=200, convs=0, batchsize=64, initial_eta=5e-3, add_noise=True):
     # Load the dataset
     print("Loading data...")
     datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Piano'
     glob_file_str = '*.npy'
     n_pieces = 0  # 0 is equal to all pieces, unbalanced dataset
-    crop = (32, 96)
+    crop = None  # (32, 96)
     as_dict = False
-    dataset = load_data(datapath, glob_file_str, n_pieces, crop, as_dict)
+    inputs, _ = load_data(datapath, glob_file_str, n_pieces, crop, as_dict)
 
     # scale to [0, 1]
-    # dataset = (dataset + 1) * 0.5
+    # inputs = (inputs + 1) * 0.5
 
     # Prepare Theano variables for inputs and targets
     noise_var = T.matrix('noise')
     input_var = T.tensor4('inputs')
 
+    # Instantiate a symbolic noise generator to use for training
+    from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+    srng = RandomStreams(seed=np.random.randint(2147462579, size=6))
+
     # Create neural network model
     print("Building model and compiling functions...")
-    generator = build_generator(noise_var)
-    discriminator = build_discriminator(input_var)
+    generator = build_generator(noise_var, convs)
+    discriminator = build_discriminator(input_var, convs)
 
     # Create expression for passing real data through the discriminator
     real_out = lasagne.layers.get_output(discriminator)
@@ -143,30 +192,32 @@ def main(num_epochs=200, initial_eta=1e-4):
         discriminator, lasagne.layers.get_output(generator))
 
     # Create loss expressions
-    generator_loss = lasagne.objectives.binary_crossentropy(fake_out, 1).mean()
-    discriminator_loss = (
-        lasagne.objectives.binary_crossentropy(real_out, 1) +
-        lasagne.objectives.binary_crossentropy(fake_out, 0)).mean()
+    # one-sided label smoothing
+    lbl_noise = 0.0
+    if add_noise:
+        lbl_noise = srng.normal(size=(3,), avg=0.0, std=0.1)
+        generator_loss = lasagne.objectives.binary_crossentropy(
+            fake_out, 1).mean()
+        discriminator_loss = (
+            lasagne.objectives.binary_crossentropy(real_out, 1 + lbl_noise) +
+            lasagne.objectives.binary_crossentropy(fake_out, 0)).mean()
 
     # Create update expressions for training
     generator_params = lasagne.layers.get_all_params(generator, trainable=True)
     discriminator_params = lasagne.layers.get_all_params(discriminator, trainable=True)
     eta = theano.shared(lasagne.utils.floatX(initial_eta))
     updates = lasagne.updates.adam(
-        generator_loss, generator_params, learning_rate=eta, beta1=0.5)
+        generator_loss, generator_params, learning_rate=eta, beta1=0.9)
     updates.update(lasagne.updates.adam(
-            discriminator_loss, discriminator_params, learning_rate=eta, beta1=0.5))
+            discriminator_loss, discriminator_params, learning_rate=eta, beta1=0.9))
 
-    # Instantiate a symbolic noise generator to use for training
-    from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-    srng = RandomStreams(seed=np.random.randint(2147462579, size=6))
     noise = srng.uniform((batchsize, 100))
 
     # Compile a function performing a training step on a mini-batch (by giving
     # the updates dictionary) and returning the corresponding training loss:
     train_fn = theano.function([input_var],
                                [(real_out > .5).mean(), (fake_out < .5).mean()],
-                               givens={noise_var: noise,
+                               givens={noise_var: noise},
                                updates=updates)
 
 
@@ -174,14 +225,14 @@ def main(num_epochs=200, initial_eta=1e-4):
     gen_fn = theano.function([noise_var],
                              lasagne.layers.get_output(generator,
                                                        deterministic=True))
-
+    obs_length = 128
     print("Starting training...")
     for epoch in range(num_epochs):
         # In each epoch, we do a full pass over the training data:
         train_err = 0
         train_batches = 0
         start_time = time.time()
-        for batch in iterate_minibatches(dataset, 64):
+        for batch in iterate_minibatches(inputs, batchsize, length=obs_length):
             batch = lasagne.utils.floatX(batch)
             # reshape batch to proper dimensions
             batch = batch.reshape(
@@ -197,11 +248,12 @@ def main(num_epochs=200, initial_eta=1e-4):
 
         # And finally, we plot some generated data
         samples = gen_fn(lasagne.utils.floatX(np.random.rand(42, noise_size)))
-        plt.imsave('images/dcgan_proll/mnist_samples_epoch{}.png'.format(epoch),
-                    (samples.reshape(6, 7, 64, 64)
+        plt.imsave('images/dcgan_proll/proll_samples_epoch{}.png'.format(epoch),
+                    (samples.reshape(6, 7, obs_length, obs_length)
                             .transpose(0, 2, 1, 3)
-                            .reshape(6*64, 7*64)).T,
-                    cmap='gray')
+                            .reshape(6*obs_length, 7*obs_length)).T,
+                    cmap='gray',
+                    origin='bottom')
 
         # After half the epochs, start decaying the learning rate towards zero
         if epoch >= num_epochs // 2:
@@ -220,7 +272,7 @@ def main(num_epochs=200, initial_eta=1e-4):
 
 if __name__ == '__main__':
     if ('--help' in sys.argv) or ('-h' in sys.argv):
-        print("Trains a DCGAN on MNIST using Lasagne.")
+        print("Trains a DCGAN on Piano Rolls using Lasagne.")
         print("Usage: %s [EPOCHS]" % sys.argv[0])
         print()
         print("EPOCHS: number of training epochs to perform (default: 100)")
@@ -228,4 +280,10 @@ if __name__ == '__main__':
         kwargs = {}
         if len(sys.argv) > 1:
             kwargs['num_epochs'] = int(sys.argv[1])
+        if len(sys.argv) > 2:
+            kwargs['convs'] = int(sys.argv[2])
+        if len(sys.argv) > 3:
+            kwargs['batchsize'] = int(sys.argv[3])
+        if len(sys.argv) > 4:
+            kwargs['initial_eta'] = float(sys.argv[4])
         main(**kwargs)
