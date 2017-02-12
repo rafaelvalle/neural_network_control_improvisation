@@ -18,7 +18,7 @@ from data_processing import load_data
 import pdb
 
 # data params
-datapath = '/Users/rafaelvalle/Desktop/datasets/MIDI/Piano'
+datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Piano'
 glob_file_str = '*.npy'
 n_pieces = 8  # 0 is equal to all pieces, unbalanced dataset
 crop = None  # (32, 96)
@@ -28,8 +28,8 @@ as_dict = True
 dataset = load_data(datapath, glob_file_str, n_pieces, crop, as_dict)
 
 # model params
-d_batch_size = g_batch_size = 64
-n_timesteps = 100  # 200 ms per step
+d_batch_size = g_batch_size = 512
+n_timesteps = 100  # 100 ms per step
 min_len = 50
 max_len = 100
 single_len = True
@@ -40,7 +40,8 @@ n_units_d = 8
 n_units_g = 16
 arch = 1
 
-
+# Minibatch Layer from
+# https://github.com/openai/improved-gan/blob/master/mnist_svhn_cifar10/nn.py
 def output_nonlinearity(x, temperature=1):
     return T.clip(lasagne.nonlinearities.sigmoid(x / temperature),
                   1e-7, 1 - 1e-7)
@@ -69,7 +70,7 @@ if arch == 1:
                    lasagne.nonlinearities.rectify,  # feedforward
                    lasagne.nonlinearities.rectify,  # feedbackward
                    sigmoid_temperature),  # sigmoid with temperature
-               'learning_rate': 1e-4,
+               'learning_rate': 2e-5,
                'regularization': 1e-5,
                'unroll': 0,
                }
@@ -89,7 +90,7 @@ if arch == 1:
                    lasagne.nonlinearities.rectify,  # forw and backward noise
                    lasagne.nonlinearities.rectify,  # data and noise lstm concat
                    lasagne.nonlinearities.tanh),
-               'learning_rate': 1e-4
+               'learning_rate': 2e-5
                }
 elif arch == 2:
     raise Exception("arch 2 not implemented")
@@ -108,6 +109,49 @@ cell_parameters = lasagne.layers.recurrent.Gate(
     W_hid=lasagne.init.Orthogonal(),
     W_cell=None, b=lasagne.init.Constant(0.),
     nonlinearity=lasagne.nonlinearities.tanh)
+
+
+# minibatch discrimination layer
+# https://github.com/openai/improved-gan/blob/master/mnist_svhn_cifar10/nn.py
+class MinibatchLayer(lasagne.layers.Layer):
+    def __init__(self, incoming, num_kernels, dim_per_kernel=5, theta=lasagne.init.Normal(0.05),
+                 log_weight_scale=lasagne.init.Constant(0.), b=lasagne.init.Constant(-1.), **kwargs):
+        super(MinibatchLayer, self).__init__(incoming, **kwargs)
+        self.num_kernels = num_kernels
+        num_inputs = int(np.prod(self.input_shape[1:]))
+        self.theta = self.add_param(theta, (num_inputs, num_kernels, dim_per_kernel), name="theta")
+        self.log_weight_scale = self.add_param(log_weight_scale, (num_kernels, dim_per_kernel), name="log_weight_scale")
+        self.W = self.theta * (T.exp(self.log_weight_scale)/T.sqrt(T.sum(T.square(self.theta),axis=0))).dimshuffle('x',0,1)
+        self.b = self.add_param(b, (num_kernels,), name="b")
+        
+    def get_output_shape_for(self, input_shape):
+        return (input_shape[0], np.prod(input_shape[1:])+self.num_kernels)
+
+    def get_output_for(self, input, init=False, **kwargs):
+        if input.ndim > 2:
+            # if the input has more than two dimensions, flatten it into a
+            # batch of feature vectors.
+            input = input.flatten(2)
+        
+        activation = T.tensordot(input, self.W, [[1], [0]])
+        abs_dif = (T.sum(abs(activation.dimshuffle(0,1,2,'x') - activation.dimshuffle('x',1,2,0)),axis=2)
+                    + 1e6 * T.eye(input.shape[0]).dimshuffle(0,'x',1))
+
+        if init:
+            mean_min_abs_dif = 0.5 * T.mean(T.min(abs_dif, axis=2),axis=0)
+            abs_dif /= mean_min_abs_dif.dimshuffle('x',0,'x')
+            self.init_updates = [(self.log_weight_scale, self.log_weight_scale-T.log(mean_min_abs_dif).dimshuffle(0,'x'))]
+        
+        f = T.sum(T.exp(-abs_dif),axis=2)
+
+        if init:
+            mf = T.mean(f,axis=0)
+            f -= mf.dimshuffle('x',0)
+            self.init_updates.append((self.b, -mf))
+        else:
+            f += self.b.dimshuffle('x',0)
+
+        return T.concatenate([input, f], axis=1)
 
 
 def build_discriminator(params):
@@ -133,6 +177,9 @@ def build_discriminator(params):
 
     # concatenate output of forward and backward layers
     l_concat = lasagne.layers.ConcatLayer([l_forward, l_backward], axis=1)
+
+    # minibatch layer on forward and backward layers
+    l_minibatch = MinibatchLayer(l_concat, num_kernels=100)
 
     # output layer
     l_out = lasagne.layers.DenseLayer(
@@ -285,10 +332,11 @@ def build_training(discriminator, generator, d_specs, g_specs, add_noise=True):
     srng = RandomStreams(seed=np.random.randint(2147462579, size=6))
     noise = srng.normal(size=g_specs['noise_shape'], avg=0.0, std=1.0)
 
-    lbl_noise = [0.0] * 3
+    # one-sided label smoothing
+    lbl_noise = 0.0
     if add_noise:
         print("  adding label noise")
-        lbl_noise = srng.normal(size=(3,), avg=0.0, std=0.1)
+        lbl_noise = srng.normal(size=(1,), avg=0.0, std=0.1)
 
     # model params
     d_params = lasagne.layers.get_all_params(discriminator.l_out, trainable=True)
@@ -312,13 +360,12 @@ def build_training(discriminator, generator, d_specs, g_specs, add_noise=True):
                                             discriminator.l_mask: d_in_M})
     # loss functions
     g_loss = lasagne.objectives.binary_crossentropy(
-        T.clip(d_g_z, 1e-7, 1.0 - 1e-7), 1.0 + lbl_noise[0])
+        T.clip(d_g_z, 1e-7, 1.0 - 1e-7), 1.0)
     g_loss = g_loss.mean()
-
     d_x_loss = lasagne.objectives.binary_crossentropy(
-        d_x, 1.0 + lbl_noise[1])
+        d_x, 1.0 + lbl_noise)
     d_g_z_loss = lasagne.objectives.binary_crossentropy(
-        d_g_z, 0.0 + lbl_noise[2])
+        d_g_z, 0.0)
 
     d_loss = d_x_loss + d_g_z_loss
     d_loss = d_loss.mean()
@@ -346,7 +393,7 @@ def build_training(discriminator, generator, d_specs, g_specs, add_noise=True):
     # training functions
     d_train_fn = theano.function(
         inputs=[d_in_X, d_in_M, g_in_D, g_in_C, g_in_M],
-        outputs=[d_loss, d_x_loss, d_g_z_loss, d_x, d_g_z, acc_d_x, acc_d_g_z],
+        outputs=[d_loss, acc_d_x, acc_d_g_z],
         updates=d_updates,
         name='d_train')
     if d_specs.get('unroll', 0):
@@ -406,62 +453,53 @@ print("Create data iterator")
 data_iter = sample_data(dataset, d_batch_size, min_len, max_len,
                         single_len=single_len)
 
-# pre training variables
-n_d_iterations_pre = 2
-
-# training variables
-d_losses = []
-g_losses = []
-d_acc_x = []
-d_acc_g_z = []
-n_iterations = 5000
+# training and pre-training variables
+n_d_iterations_pre = 5
+n_epochs = 1000
+samples_per_composer = 10 * 1800  # 10 pieces, 1800 frames/piece
+epoch_size = int(len(dataset) * samples_per_composer / d_batch_size)
 n_d_iterations = 1
 n_g_iterations = 1
-epoch = 100
-print("Epoch has {} samples".format(epoch))
 
 folderpath = (
     'piano_multistep_lstm_gan_pre{}'
     'dlr{}glr{}dit{}git{}'
     'bs{}temp{}nunits{}nt{}'
-    'crop{}unroll{}').format(n_d_iterations_pre,
-                             d_specs['learning_rate'], g_specs['learning_rate'],
-                             n_d_iterations, n_g_iterations,
-                             d_batch_size, temperature, n_units_g,
-                             n_timesteps, crop, d_specs['unroll'])
+    'crop{}unroll{}_esize{}').format(
+        n_d_iterations_pre, d_specs['learning_rate'], g_specs['learning_rate'],
+        n_d_iterations, n_g_iterations, d_batch_size, temperature, n_units_g,
+        n_timesteps, crop, d_specs['unroll'], epoch_size)
 
 if not os.path.exists(os.path.join('images', folderpath)):
     os.makedirs(os.path.join('images', folderpath))
 
 # pre training loop
+d_losses = []
+d_acc_x = []
+d_acc_g_z = []
 print("Pre-training {} iterations".format(n_d_iterations_pre))
 for i in range(n_d_iterations_pre):
     # use same data for discriminator and generator
     d_X, d_C, d_M = data_iter.next()
     g_X, g_C, g_M = d_X, d_C, d_M
 
-    d_loss, d_x_loss, d_g_z_loss, d_x, d_g_z, acc_d_x, acc_d_g_z = d_train_fn(
-        d_X, d_M, g_X, g_C, g_M)
+    d_loss, acc_d_x, acc_d_g_z = d_train_fn(d_X, d_M, g_X, g_C, g_M)
     d_losses.append(d_loss)
     d_acc_x.append(acc_d_x)
     d_acc_g_z.append(acc_d_g_z)
 
-
     if i == (n_d_iterations_pre - 1):
-        fig, axes = plt.subplots(4, 1, figsize=(3, 6))
-        axes[0].set_title('D(x)')
-        axes[0].imshow(d_x, aspect='auto', interpolation=None, cmap='gray')
-        axes[1].set_title('D(G(z))')
-        axes[1].imshow(d_g_z, aspect='auto', interpolation=None, cmap='gray')
-        axes[2].set_title('Loss(d)')
-        axes[2].plot(d_losses)
-        axes[3].set_title('Accuracy D(x) and D(G(z))')
-        axes[3].plot(d_acc_x, color='blue')
-        axes[3].plot(d_acc_g_z, color='red')
+        fig, axes = plt.subplots(1, 2, figsize=(4, 3))
+        axes[0].set_title('Loss(d)')
+        axes[0].plot(d_losses)
+        axes[1].set_title('Accuracy D(x) and D(G(z))')
+        axes[1].plot(d_acc_x, color='blue')
+        axes[1].plot(d_acc_g_z, color='red')
         fig.tight_layout()
         fig.savefig('images/{}/pretraining'.format(folderpath))
         noise = lasagne.utils.floatX(np.random.normal(size=g_specs['noise_shape']))
-        samples = g_sample_fn(d_X, noise, d_C, d_M)
+        rand_ids = np.random.randint(0, g_specs['noise_shape'][0], 64)
+        samples = g_sample_fn(d_X, noise, d_C, d_M)[rand_ids]
 
         plt.imsave('images/{}/pretraining_samples.png'.format(folderpath),
                    (samples.reshape(8, 8, max_len, n_features)
@@ -473,62 +511,65 @@ for i in range(n_d_iterations_pre):
 
 
 # training loop
-print("Training")
-for iteration in tqdm(range(n_iterations)):
-    for i in range(n_d_iterations):
-        # load mini-batch
-        d_X, d_C, d_M = data_iter.next()
-        g_C, g_M = d_C, d_M
+d_losses = []
+g_losses = []
+d_acc_x = []
+d_acc_g_z = []
+print("Training {} epochs, {} samples each, batch size {}".format(
+    n_epochs, epoch_size, d_batch_size))
+for epoch in tqdm(range(n_epochs)):
+    d_loss, acc_d_x, acc_d_g_z, g_loss = 0, 0, 0, 0
+    for iteration in range(epoch_size):
+        for i in range(n_d_iterations):
+            # load mini-batch
+            d_X, d_C, d_M = data_iter.next()
+            g_C, g_M = d_C, d_M
 
-        # randomly add noise to d_X
-        if (np.random.random() > 0.66):
-            g_X = np.copy(d_X)
-            d_X += np.random.normal(0, 1, size=d_X.shape)
-        else:
-            g_X = d_X
+            # randomly add noise to d_X
+            if (np.random.random() > 0.66):
+                g_X = np.copy(d_X)
+                d_X += np.random.normal(0, 1, size=d_X.shape)
+            else:
+                g_X = d_X
 
-    d_loss, d_x_loss, d_g_z_loss, d_x, d_g_z, acc_d_x, acc_d_g_z = d_train_fn(
-        d_X, d_M, g_X, g_C, g_M)
+        d_loss, acc_d_x, acc_d_g_z = d_train_fn(d_X, d_M, g_X, g_C, g_M)
+
+        for i in range(n_g_iterations):
+            # load mini-batch
+            d_X, d_C, d_M = data_iter.next()
+            g_X, g_C, g_M = d_X, d_C, d_M
+
+            # train iteration
+            if d_specs.get('unroll'):
+                g_loss += g_train_fn(g_X, g_C, g_M, d_M, d_X)
+            else:
+                g_loss += g_train_fn(g_X, g_C, g_M)
+
     d_losses.append(d_loss)
     d_acc_x.append(acc_d_x)
     d_acc_g_z.append(acc_d_g_z)
+    g_losses.append(g_loss)
 
-    for i in range(n_g_iterations):
-        # load mini-batch
-        d_X, d_C, d_M = data_iter.next()
-        g_X, g_C, g_M = d_X, d_C, d_M
+    fig, axes = plt.subplots(3, 1, figsize=(8, 6))
+    axes[0].set_title('Loss(d)')
+    axes[0].plot(d_losses)
+    axes[1].set_title('Loss(g)')
+    axes[1].plot(g_losses)
+    axes[2].set_title('Accuracy D(x) D(G(z)')
+    axes[2].plot(d_acc_x, color='blue')
+    axes[2].plot(d_acc_g_z, color='red')
+    fig.tight_layout()
+    fig.savefig('images/{}/epoch{}'.format(folderpath, epoch))
 
-        # train iteration
-        if d_specs.get('unroll'):
-            g_loss = g_train_fn(g_X, g_C, g_M, d_M, d_X)
-        else:
-            g_loss = g_train_fn(g_X, g_C, g_M)
-        g_losses.append(g_loss)
+    noise = lasagne.utils.floatX(np.random.normal(size=g_specs['noise_shape']))
+    rand_ids = np.random.randint(0, g_specs['noise_shape'][0], 64)
+    samples = g_sample_fn(d_X, noise, d_C, d_M)[rand_ids]
+    plt.imsave('images/{}/epoch{}_samples.png'.format(folderpath, epoch),
+            (samples.reshape(8, 8, max_len, n_features)
+                    .transpose(0, 2, 1, 3)
+                    .reshape(8*max_len, 8*n_features)).T,
+            cmap='gray',
+            origin='bottom')
 
-    if iteration % epoch == 0:
-        fig, axes = plt.subplots(5, 1, figsize=(4, 8))
-        axes[0].set_title('D(x)')
-        axes[0].imshow(d_x, aspect='auto', interpolation=None, cmap='gray')
-        axes[1].set_title('D(G(z))')
-        axes[1].imshow(d_g_z, aspect='auto', interpolation=None, cmap='gray')
-        axes[2].set_title('Loss(d)')
-        axes[2].plot(d_losses)
-        axes[3].set_title('Loss(g)')
-        axes[3].plot(g_losses)
-        axes[4].set_title('Accuracy D(x) D(G(z)')
-        axes[4].plot(d_acc_x, color='blue')
-        axes[4].plot(d_acc_g_z, color='red')
-        fig.tight_layout()
-        fig.savefig('images/{}/iteration{}'.format(folderpath, iteration))
-
-        noise = lasagne.utils.floatX(np.random.normal(size=g_specs['noise_shape']))
-        samples = g_sample_fn(d_X, noise, d_C, d_M)
-        plt.imsave('images/{}/iteration{}_samples.png'.format(folderpath, iteration),
-                   (samples.reshape(8, 8, max_len, n_features)
-                           .transpose(0, 2, 1, 3)
-                           .reshape(8*max_len, 8*n_features)).T,
-                   cmap='gray',
-                   origin='bottom')
-
-        plt.close('all')
-        display.clear_output(wait=True)
+    plt.close('all')
+    display.clear_output(wait=True)
