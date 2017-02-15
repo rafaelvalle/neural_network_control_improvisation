@@ -5,8 +5,25 @@ import glob2 as glob
 import pdb
 
 
+def encode_labels(labels, one_hot=False):
+    labels_enc = []
+    labels_dict = {}
+    i = 0
+    for l in labels:
+        if l not in labels_dict:
+            labels_dict[l] = i
+            i += 1
+        labels_enc.append(labels_dict[l])
+
+    if one_hot:
+        eye = np.eye(len(labels_dict), dtype=np.int32)
+        labels_enc = eye[labels_enc]
+
+    return labels_enc
+
+
 def load_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
-              scale=True, patch_size=False):
+              scale=True, patch_size=False, encoded_labels=True):
 
     data = defaultdict(list)
     if not as_dict:
