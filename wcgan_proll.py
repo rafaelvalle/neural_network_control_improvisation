@@ -23,14 +23,15 @@ import theano.tensor as T
 
 import lasagne
 
-from data_processing import load_data
+from data_processing import load_data, encode_labels
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 import pdb
 
 
-def build_generator(input_var=None):
-    from lasagne.layers import InputLayer, ReshapeLayer, DenseLayer
+def build_generator(input_var, cond_var, n_conds):
+    from lasagne.layers import InputLayer, ReshapeLayer, DenseLayer, ConcatLayer
     try:
         from lasagne.layers import TransposedConv2DLayer as Deconv2DLayer
     except ImportError:
@@ -43,7 +44,10 @@ def build_generator(input_var=None):
         from lasagne.layers import batch_norm
     from lasagne.nonlinearities import sigmoid
     # input: 100dim
-    layer = InputLayer(shape=(None, 100), input_var=input_var)
+    layer_in = InputLayer(shape=(None, 100), input_var=input_var)
+    cond_in = InputLayer(shape=(None, n_conds), input_var=cond_var)
+    layer = ConcatLayer([layer_in, cond_in])
+
     # fully-connected layer
     layer = batch_norm(DenseLayer(layer, 1024))
     # project and reshape
@@ -81,7 +85,7 @@ def build_critic(input_var=None):
     return layer
 
 
-def iterate_minibatches(inputs, batchsize, shuffle=True, forever=False,
+def iterate_minibatches(inputs, labels, batchsize, shuffle=True, forever=True,
                         length=128):
     if shuffle:
         indices = np.arange(len(inputs))
@@ -103,13 +107,14 @@ def iterate_minibatches(inputs, batchsize, shuffle=True, forever=False,
             else:
                 data = inputs[excerpt]
 
-            yield lasagne.utils.floatX(np.array(data))
+            yield lasagne.utils.floatX(np.array(data)), labels[excerpt]
+
         if not forever:
             break
 
 
-def main(num_epochs=1000, epochsize=100, batchsize=64, initial_eta=1e-2,
-         clip=0.01):
+def main(num_epochs=1000, epochsize=100, batchsize=64,
+         initial_eta=np.float32(1e-2), clip=0.01):
     # Load the dataset
     print("Loading data...")
     datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Piano'
@@ -119,14 +124,16 @@ def main(num_epochs=1000, epochsize=100, batchsize=64, initial_eta=1e-2,
     as_dict = False
     inputs, labels = load_data(datapath, glob_file_str, n_pieces, crop, as_dict,
                                patch_size=128)
+    labels = encode_labels(labels, one_hot=True).astype(np.float32)
 
     # Prepare Theano variables for inputs
-    noise_var = T.matrix('noise')
-    input_var = T.tensor4('inputs')
+    noise_var = T.fmatrix('noise')
+    cond_var = T.fmatrix('condition')
+    input_var = T.ftensor4('inputs')
 
     # Create neural network model
     print("Building model and compiling functions...")
-    generator = build_generator(noise_var)
+    generator = build_generator(noise_var, cond_var, labels.shape[1])
     critic = build_critic(input_var)
 
     # Create expression for passing real data through the critic
@@ -160,25 +167,28 @@ def main(num_epochs=1000, epochsize=100, batchsize=64, initial_eta=1e-2,
 
     # Compile functions performing a training step on a mini-batch (according
     # to the updates dictionary) and returning the corresponding score:
-    generator_train_fn = theano.function([], generator_score,
+    generator_train_fn = theano.function([cond_var], generator_score,
                                          givens={noise_var: noise},
                                          updates=generator_updates)
-    critic_train_fn = theano.function([input_var], critic_score,
+    critic_train_fn = theano.function([input_var, cond_var], critic_score,
                                       givens={noise_var: noise},
                                       updates=critic_updates)
 
     # Compile another function generating some data
-    gen_fn = theano.function([noise_var],
+    gen_fn = theano.function([noise_var, cond_var],
                              lasagne.layers.get_output(generator,
                                                        deterministic=True))
 
     # Finally, launch the training loop.
     print("Starting training...")
     # We create an infinite supply of batches (as an iterable generator):
-    batches = iterate_minibatches(inputs, batchsize, shuffle=True,
+    batches = iterate_minibatches(inputs, labels, batchsize, shuffle=True,
                                   length=0, forever=True)
     # We iterate over epochs:
     generator_updates = 0
+    k = 0
+    epoch_critic_scores = []
+    epoch_generator_scores = []
     for epoch in range(num_epochs):
         start_time = time.time()
 
@@ -188,33 +198,46 @@ def main(num_epochs=1000, epochsize=100, batchsize=64, initial_eta=1e-2,
         # critic is updated 100 times instead, following the authors' code.
         critic_scores = []
         generator_scores = []
-        for _ in range(epochsize):
+        for _ in tqdm(range(epochsize)):
             if (generator_updates < 25) or (generator_updates % 500 == 0):
                 critic_runs = 100
             else:
                 critic_runs = 5
             for _ in range(critic_runs):
-                batch = next(batches)
+                batch_in, batch_cond = next(batches)
                 # reshape batch to proper dimensions
-                batch = batch.reshape(
-                    (batch.shape[0], 1, batch.shape[1], batch.shape[2]))
-                critic_scores.append(critic_train_fn(batch))
-            generator_scores.append(generator_train_fn())
+                batch_in = batch_in.reshape(
+                    (batch_in.shape[0], 1, batch_in.shape[1], batch_in.shape[2]))
+                critic_scores.append(critic_train_fn(batch_in, batch_cond))
+            generator_scores.append(generator_train_fn(batch_cond))
             generator_updates += 1
 
         # Then we print the results for this epoch:
         print("Epoch {} of {} took {:.3f}s".format(
             epoch + 1, num_epochs, time.time() - start_time))
-        print("  generator score:\t\t{}".format(np.mean(generator_scores)))
-        print("  Wasserstein distance:\t\t{}".format(np.mean(critic_scores)))
+        epoch_critic_scores.append(np.mean(generator_scores)))
+        epoch_generator_scores.append(np.mean(critic_scores)))
 
-        # And finally, we plot some generated data
-        samples = gen_fn(lasagne.utils.floatX(np.random.rand(42, 100)))
-        plt.imsave('images/wgan_proll/wgan_epoch{}.png'.format(epoch),
-                   (samples.reshape(6, 7, 128, 128)
-                           .transpose(0, 2, 1, 3)
-                           .reshape(6*128, 7*128)).T,
-                   cmap='gray')
+        fig, axes = plt.subplots(1, 2, figsize=(8, 2))
+        axes[0].set_title('Loss(d)')
+        axes[0].plot(epoch_critic_scores)
+        axes[1].set_title('Mean(Loss(d))')
+        axes[1].plot(epoch_generator_scores)
+        fig.tight_layout()
+        fig.savefig('images/{}/g_updates{}'.format(folderpath, epoch))
+        plt.close('all')
+        display.clear_output(wait=True)
+
+        if gen_iterations % 500 == 0:
+            # And finally, we plot some generated data
+            samples = gen_fn(lasagne.utils.floatX(np.random.rand(42, 100)),
+                             batch_cond[:42])
+            plt.imsave('images/wcgan_proll/wcgan_gits{}.png'.format(epoch),
+                    (samples.reshape(6, 7, 128, 128)
+                            .transpose(0, 2, 1, 3)
+                            .reshape(6*128, 7*128)).T,
+                    cmap='gray')
+            k += 1
 
         # After half the epochs, we start decaying the learn rate towards zero
         if epoch >= num_epochs // 2:
@@ -222,8 +245,8 @@ def main(num_epochs=1000, epochsize=100, batchsize=64, initial_eta=1e-2,
             eta.set_value(lasagne.utils.floatX(initial_eta*2*(1 - progress)))
 
     # Optionally, you could now dump the network weights to a file like this:
-    # np.savez('wgan_proll_gen.npz', *lasagne.layers.get_all_param_values(generator))
-    # np.savez('wgan_proll_crit.npz', *lasagne.layers.get_all_param_values(critic))
+    # np.savez('wcgan_proll_gen.npz', *lasagne.layers.get_all_param_values(generator))
+    # np.savez('wcgan_proll_crit.npz', *lasagne.layers.get_all_param_values(critic))
     #
     # And load them again later on like this:
     # with np.load('model.npz') as f:
@@ -233,7 +256,7 @@ def main(num_epochs=1000, epochsize=100, batchsize=64, initial_eta=1e-2,
 
 if __name__ == '__main__':
     if ('--help' in sys.argv) or ('-h' in sys.argv):
-        print("Trains a WGAN on Piano Rolls using Lasagne.")
+        print("Trains a WCGAN on Piano Rolls using Lasagne.")
         print("Usage: %s [EPOCHS [EPOCHSIZE]]" % sys.argv[0])
         print()
         print("EPOCHS: number of training epochs to perform (default: 1000)")
