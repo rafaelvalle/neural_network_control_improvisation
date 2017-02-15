@@ -251,8 +251,7 @@ def main(num_epochs=1000, epochsize=100, batchsize=64,
             # And finally, we plot some generated data
             samples = gen_fn(lasagne.utils.floatX(np.random.rand(42, 100)),
                              batch_cond[:42])
-            plt.imsave('images/wccrepe_:w
-                       gan_proll/wcgan_gits{}.png'.format(epoch),
+            plt.imsave('images/wccrepe_gan_proll/wcgan_gits{}.png'.format(epoch),
                     (samples.reshape(6, 7, 128, 128)
                             .transpose(0, 2, 1, 3)
                             .reshape(6*128, 7*128)).T,
