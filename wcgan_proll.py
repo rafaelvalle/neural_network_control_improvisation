@@ -24,7 +24,10 @@ import theano.tensor as T
 import lasagne
 
 from data_processing import load_data, encode_labels
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
 from tqdm import tqdm
 
 import pdb
@@ -215,8 +218,8 @@ def main(num_epochs=1000, epochsize=100, batchsize=64,
         # Then we print the results for this epoch:
         print("Epoch {} of {} took {:.3f}s".format(
             epoch + 1, num_epochs, time.time() - start_time))
-        epoch_critic_scores.append(np.mean(generator_scores)))
-        epoch_generator_scores.append(np.mean(critic_scores)))
+        epoch_critic_scores.append(np.mean(generator_scores))
+        epoch_generator_scores.append(np.mean(critic_scores))
 
         fig, axes = plt.subplots(1, 2, figsize=(8, 2))
         axes[0].set_title('Loss(d)')
@@ -224,11 +227,10 @@ def main(num_epochs=1000, epochsize=100, batchsize=64,
         axes[1].set_title('Mean(Loss(d))')
         axes[1].plot(epoch_generator_scores)
         fig.tight_layout()
-        fig.savefig('images/{}/g_updates{}'.format(folderpath, epoch))
+        fig.savefig('images/wcgan_proll/g_updates{}'.format(epoch))
         plt.close('all')
-        display.clear_output(wait=True)
 
-        if gen_iterations % 500 == 0:
+        if generator_updates % 500 == 0:
             # And finally, we plot some generated data
             samples = gen_fn(lasagne.utils.floatX(np.random.rand(42, 100)),
                              batch_cond[:42])
