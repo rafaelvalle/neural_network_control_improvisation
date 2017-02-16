@@ -1,4 +1,4 @@
-#!/usr/local/bin/python
+#!/usr/bin/python
 
 import argparse
 import numpy as np
@@ -9,7 +9,7 @@ import glob2 as glob
 def convert(globstr, fs, program, threshold, samples):
     for filepath in glob.glob(globstr):
         prolls = np.load(filepath)
-        print '{}, {}'.format(filepath, prolls.shape)
+        print('{}, {}'.format(filepath, prolls.shape))
         for i in range(min(samples, len(prolls))):
             proll = prolls[i]
             if len(proll.shape) == 3:
@@ -21,19 +21,17 @@ def convert(globstr, fs, program, threshold, samples):
             pianoroll_to_midi(
                 proll, fs, program, filepath=filepath+'{}.midi'.format(i))
 
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("globstr", type=str,
                         help="Glob string")
-
     parser.add_argument("fs", type=int, default=10,
                         help="Sampling rate per second")
-    parser.add_argument("program", type=int, default=1,
+    parser.add_argument("-p", "--program", type=int, default=1,
                         help="MIDI program")
-    parser.add_argument("threshold", type=int, default=0,
+    parser.add_argument("-t", "--threshold", type=int, default=None,
                         help="Threshold for silence")
-    parser.add_argument("samples", type=int, default=10,
+    parser.add_argument("-s", "--samples", type=int, default=10,
                         help="Number of samples per file")
 
     args = parser.parse_args()
