@@ -1,5 +1,54 @@
 from __future__ import division
 import numpy as np
+import pretty_midi as pm
+
+
+def pianoroll_to_midi(pianoroll, fs, program=1, filename='midifile.mid'):
+    # create PrettyMIDI object
+    midifile = pm.PrettyMIDI()
+    # create Instrument instance
+    if type(program) is not int:
+        program = pm.instrument_name_to_program(program)
+    instrument = pm.Instrument(program=program)
+
+    # cumbersomely slow
+    for note in range(pianoroll.shape[1]):
+        start = 0
+        end = 0
+        while end < pianoroll.shape[0]:
+            # find where note starts
+            while start < pianoroll.shape[0] and pianoroll[start, note] == 0:
+                start += 1
+            end = start + 1
+
+            # nothing left
+            if start == pianoroll.shape[0]:
+                break
+
+            # find where note ends
+            while end < pianoroll.shape[0] and pianoroll[end, note] > 0:
+                end += 1
+
+            # add note to instrument
+            instrument.notes.append(pm.Note(
+                velocity=int(pianoroll[start, note]),
+                pitch=note,
+                start=start * 1.0/fs,
+                end=end * 1.0/fs))
+            start = end
+
+    """
+    for t in range(pianoroll.shape[0]):
+        midi_notes = np.argwhere(pianoroll[t] > 0)
+        for midi_note in midi_notes:
+            instrument.notes.append(pm.Note(
+                velocity=pianoroll[t, midi_note],
+                pitch=midi_note,
+                start=t * 1.0/fs,
+                end=(t+1) * 1.0/fs))
+    """
+    midifile.instruments.append(instrument)
+    midifile.write(filename)
 
 
 def generateNot1(seq, spec, offset, ratio=0.5, as_proll=False):
@@ -180,7 +229,7 @@ def generate1(spec, n_pitches, n_timesteps, offset, as_proll=False):
 
 def generateSequence(intervals, min_len, max_len, note_resolution=12, clip=False):
     """Generates all training data based on intervals
-    
+
     PARAMETERS
     ----------
     intervals : list
@@ -226,7 +275,7 @@ def generateSequence(intervals, min_len, max_len, note_resolution=12, clip=False
         # for j in xrange(0, 1+max_len - i):
         #    masks.append(np.roll(mask, j))
 
-    # cartesian product between masks and sequences, adding target 
+    # cartesian product between masks and sequences, adding target
     input_data, target_data, mask_data = [], [], []
     for mask in masks:
         for seq in seqs:
@@ -244,7 +293,7 @@ def generateSequence(intervals, min_len, max_len, note_resolution=12, clip=False
     mask_data = np.array(mask_data, dtype=np.int32)
 
     return input_data, target_data, mask_data
-        
+
 
 def generateSequenceIter(batch_size, intervals, min_len, max_len,
                      note_resolution=12):
