@@ -37,8 +37,6 @@ from tqdm import tqdm
 import pdb
 
 NUM_FILTERS = 256
-MIDI_SAPLES = 10
-FS = 20
 
 
 def build_generator(input_var, cond_var, n_conds):
@@ -53,7 +51,7 @@ def build_generator(input_var, cond_var, n_conds):
         from lasagne.layers.dnn import batch_norm_dnn as batch_norm
     except ImportError:
         from lasagne.layers import batch_norm
-    from lasagne.nonlinearities import sigmoid
+    from lasagne.nonlinearities import tanh
     # input: 100dim
     layer_in = InputLayer(shape=(None, 100), input_var=input_var)
     cond_in = InputLayer(shape=(None, n_conds), input_var=cond_var)
@@ -68,7 +66,7 @@ def build_generator(input_var, cond_var, n_conds):
     layer = batch_norm(Deconv2DLayer(layer, 128, 5, stride=2, crop='same',
                                      output_size=64))
     layer = Deconv2DLayer(layer, 1, 5, stride=2, crop='same', output_size=128,
-                          nonlinearity=sigmoid)
+                          nonlinearity=tanh)
     print("Generator output:", layer.output_shape)
     return layer
 
@@ -267,15 +265,15 @@ def main(num_epochs=100, epochsize=100, batchsize=512, initial_eta=1e-4,
                            .transpose(0, 2, 1, 3)
                            .reshape(6*128, 7*128)).T,
                    cmap='gray')
-        for i in range(min(MIDI_SAPLES, len(samples))):
+        for i in range(min(10, len(samples))):
             pianoroll_to_midi(
-                (samples[i][0]+1)*127, FS,
+                (samples[i][0]+1)*63.5, 20,
                 filename='midi/wccrepe_gan_proll/wccgan_{}_gits{}.midi'.format(i, epoch))
 
         # After half the epochs, we start decaying the learn rate towards zero
-        if epoch >= num_epochs // 2:
-            progress = float(epoch) / num_epochs
-            eta.set_value(lasagne.utils.floatX(initial_eta*2*(1 - progress)))
+        # if epoch >= num_epochs // 2:
+        #     progress = float(epoch) / num_epochs
+        #     eta.set_value(lasagne.utils.floatX(initial_eta*2*(1 - progress)))
 
     # Optionally, you could now dump the network weights to a file like this:
     # np.savez('wcgan_proll_gen.npz', *lasagne.layers.get_all_param_values(generator))
