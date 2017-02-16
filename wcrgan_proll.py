@@ -22,7 +22,7 @@ import pdb
 # dataset params and load data
 datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Piano'
 glob_file_str = '*.npy'
-n_pieces = 1  # 0 is equal to all pieces, unbalanced dataset
+n_pieces = 0  # 0 is equal to all pieces, unbalanced dataset
 crop = None  # (32, 96)
 as_dict = True
 dataset = load_data(datapath, glob_file_str, n_pieces, crop, as_dict)
@@ -429,6 +429,8 @@ for epoch in tqdm(range(n_epochs)):
         axes[2].plot(g_epoch_losses)
         fig.tight_layout()
         fig.savefig('images/{}/g_updates{}'.format(folderpath, generator_updates))
+        plt.close('all')
+        display.clear_output(wait=True)
 
     noise = lasagne.utils.floatX(np.random.normal(size=g_specs['noise_shape']))
     rand_ids = np.random.randint(0, g_specs['noise_shape'][0], 64)
