@@ -190,7 +190,6 @@ def main(num_epochs=1000, epochsize=100, batchsize=64,
                                   length=0, forever=True)
     # We iterate over epochs:
     generator_updates = 0
-    k = 0
     epoch_critic_scores = []
     epoch_generator_scores = []
     for epoch in range(num_epochs):
@@ -245,7 +244,6 @@ def main(num_epochs=1000, epochsize=100, batchsize=64,
                 pianoroll_to_midi(
                     (samples[i][0]+1)*127, 10,
                     filename='midi/wcgan_proll/wcgan_{}_gits{}.midi'.format(i, epoch))
-            k += 1
 
         # After half the epochs, we start decaying the learn rate towards zero
         #if epoch >= num_epochs // 2:
