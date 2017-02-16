@@ -24,6 +24,7 @@ import theano.tensor as T
 import lasagne
 
 from data_processing import load_data, encode_labels
+from music_utils import pianoroll_to_midi
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -239,17 +240,24 @@ def main(num_epochs=1000, epochsize=100, batchsize=64,
                             .transpose(0, 2, 1, 3)
                             .reshape(6*128, 7*128)).T,
                     cmap='gray')
+
+            for i in range(min(10, len(samples))):
+                pianoroll_to_midi(
+                    samples[i][0], 10,
+                    filename='midi/wcgan_proll/wcgan_{}_gits{}.midi'.format(i, epoch))
             k += 1
 
         # After half the epochs, we start decaying the learn rate towards zero
-        if epoch >= num_epochs // 2:
-            progress = float(epoch) / num_epochs
-            eta.set_value(lasagne.utils.floatX(initial_eta*2*(1 - progress)))
+        #if epoch >= num_epochs // 2:
+        #    progress = float(epoch) / num_epochs
+        #    eta.set_value(lasagne.utils.floatX(initial_eta*2*(1 - progress)))
 
     # Optionally, you could now dump the network weights to a file like this:
-    # np.savez('wcgan_proll_gen.npz', *lasagne.layers.get_all_param_values(generator))
-    # np.savez('wcgan_proll_crit.npz', *lasagne.layers.get_all_param_values(critic))
-    #
+    np.savez('wcgan_proll_gen.npz',
+             *lasagne.layers.get_all_param_values(generator))
+    np.savez('wcgan_proll_crit.npz',
+             *lasagne.layers.get_all_param_values(critic))
+
     # And load them again later on like this:
     # with np.load('model.npz') as f:
     #     param_values = [f['arr_%d' % i] for i in range(len(f.files))]
