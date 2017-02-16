@@ -243,7 +243,7 @@ def main(num_epochs=1000, epochsize=100, batchsize=64,
 
             for i in range(min(10, len(samples))):
                 pianoroll_to_midi(
-                    samples[i][0], 10,
+                    (samples[i][0]+1)*127, 10,
                     filename='midi/wcgan_proll/wcgan_{}_gits{}.midi'.format(i, epoch))
             k += 1
 
