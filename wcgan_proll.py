@@ -239,11 +239,8 @@ def main(num_epochs=1000, epochsize=100, batchsize=64,
                             .transpose(0, 2, 1, 3)
                             .reshape(6*128, 7*128)).T,
                     cmap='gray')
-
-            for i in range(min(10, len(samples))):
-                pianoroll_to_midi(
-                    (samples[i][0]+1)*63.5, 10,
-                    filename='midi/wcgan_proll/wcgan{}_gits{}.midi'.format(i, epoch))
+            # save samples to disk
+            np.save('midi/wcgan_proll/wcgan_gits{}.midi'.format(epoch), samples)
 
         # After half the epochs, we start decaying the learn rate towards zero
         # if epoch >= num_epochs // 2:
