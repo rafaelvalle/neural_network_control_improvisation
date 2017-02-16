@@ -3,7 +3,7 @@ import numpy as np
 import pretty_midi as pm
 
 
-def pianoroll_to_midi(pianoroll, fs, program=1, filename='midifile.mid'):
+def pianoroll_to_midi(pianoroll, fs, program=1, filepath='midifile.mid'):
     # create PrettyMIDI object
     midifile = pm.PrettyMIDI()
     # create Instrument instance
@@ -48,7 +48,7 @@ def pianoroll_to_midi(pianoroll, fs, program=1, filename='midifile.mid'):
                 end=(t+1) * 1.0/fs))
     """
     midifile.instruments.append(instrument)
-    midifile.write(filename)
+    midifile.write(filepath)
 
 
 def generateNot1(seq, spec, offset, ratio=0.5, as_proll=False):
