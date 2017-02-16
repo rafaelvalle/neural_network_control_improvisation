@@ -136,7 +136,7 @@ def iterate_minibatches(inputs, labels, batchsize, shuffle=True, forever=True,
             break
 
 
-def main(num_epochs=100, epochsize=100, batchsize=256, initial_eta=1e-3,
+def main(num_epochs=100, epochsize=100, batchsize=512, initial_eta=1e-4,
          clip=0.01):
     # Load the dataset
     print("Loading data...")
@@ -151,6 +151,9 @@ def main(num_epochs=100, epochsize=100, batchsize=256, initial_eta=1e-3,
     # scale to be [0, 2], then boolean matrix
     inputs += 1
     inputs = inputs.astype(bool)
+    # convert back [-1, 1]
+    inputs = (inputs.astype(np.float32) * 2) - 1
+
     print("Dataset shape {}".format(inputs.shape))
     epochsize = len(inputs) / batchsize
 
@@ -266,7 +269,7 @@ def main(num_epochs=100, epochsize=100, batchsize=256, initial_eta=1e-3,
                    cmap='gray')
         for i in range(min(MIDI_SAPLES, len(samples))):
             pianoroll_to_midi(
-                samples[i][0], FS,
+                (samples[i][0]+1)*127, FS,
                 filename='midi/wccrepe_gan_proll/wccgan_{}_gits{}.midi'.format(i, epoch))
 
         # After half the epochs, we start decaying the learn rate towards zero
