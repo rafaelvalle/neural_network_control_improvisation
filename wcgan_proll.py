@@ -46,7 +46,7 @@ def build_generator(input_var, cond_var, n_conds):
         from lasagne.layers.dnn import batch_norm_dnn as batch_norm
     except ImportError:
         from lasagne.layers import batch_norm
-    from lasagne.nonlinearities import sigmoid
+    from lasagne.nonlinearities import tanh
     # input: 100dim
     layer_in = InputLayer(shape=(None, 100), input_var=input_var)
     cond_in = InputLayer(shape=(None, n_conds), input_var=cond_var)
@@ -61,7 +61,7 @@ def build_generator(input_var, cond_var, n_conds):
     layer = batch_norm(Deconv2DLayer(layer, 128, 5, stride=2, crop='same',
                                      output_size=64))
     layer = Deconv2DLayer(layer, 1, 5, stride=2, crop='same', output_size=128,
-                          nonlinearity=sigmoid)
+                          nonlinearity=tanh)
     print("Generator output:", layer.output_shape)
     return layer
 
@@ -118,7 +118,7 @@ def iterate_minibatches(inputs, labels, batchsize, shuffle=True, forever=True,
 
 
 def main(num_epochs=1000, epochsize=100, batchsize=64,
-         initial_eta=np.float32(1e-2), clip=0.01):
+         initial_eta=1e-2, clip=0.01):
     # Load the dataset
     print("Loading data...")
     datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Piano'
@@ -242,11 +242,11 @@ def main(num_epochs=1000, epochsize=100, batchsize=64,
 
             for i in range(min(10, len(samples))):
                 pianoroll_to_midi(
-                    (samples[i][0]+1)*127, 10,
-                    filename='midi/wcgan_proll/wcgan_{}_gits{}.midi'.format(i, epoch))
+                    (samples[i][0]+1)*63.5, 10,
+                    filename='midi/wcgan_proll/wcgan{}_gits{}.midi'.format(i, epoch))
 
         # After half the epochs, we start decaying the learn rate towards zero
-        #if epoch >= num_epochs // 2:
+        # if epoch >= num_epochs // 2:
         #    progress = float(epoch) / num_epochs
         #    eta.set_value(lasagne.utils.floatX(initial_eta*2*(1 - progress)))
 
