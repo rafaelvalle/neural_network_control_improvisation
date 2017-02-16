@@ -27,6 +27,7 @@ import theano.tensor as T
 import lasagne
 
 from data_processing import load_data, encode_labels
+from music_utils import pianoroll_to_midi
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -36,6 +37,9 @@ from tqdm import tqdm
 import pdb
 
 NUM_FILTERS = 256
+MIDI_SAPLES = 10
+FS = 20
+
 
 def build_generator(input_var, cond_var, n_conds):
     from lasagne.layers import InputLayer, ReshapeLayer, DenseLayer, ConcatLayer
@@ -79,7 +83,6 @@ def build_crepe_critic(input_var=None):
     from lasagne.nonlinearities import rectify
 
     # input: (None, 1, 128, 128)
-
     layer = InputLayer(shape=(None, 1, 128, 128), input_var=input_var)
     layer = Conv2DLayer(layer, NUM_FILTERS, (7, 128), nonlinearity=rectify)
     layer = MaxPool2DLayer(layer, (3, 1))
@@ -133,18 +136,23 @@ def iterate_minibatches(inputs, labels, batchsize, shuffle=True, forever=True,
             break
 
 
-def main(num_epochs=1000, epochsize=100, batchsize=64,
-         initial_eta=np.float32(1e-2), clip=0.01):
+def main(num_epochs=100, epochsize=100, batchsize=256, initial_eta=1e-3,
+         clip=0.01):
     # Load the dataset
     print("Loading data...")
-    datapath = '//Users/rafaelvalle/Desktop/datasets/MIDI/Piano'
+    datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/JazzSolos'
     glob_file_str = '*.npy'
-    n_pieces = 32  # 0 is equal to all pieces, unbalanced dataset
+    n_pieces = 0  # 0 is equal to all pieces, unbalanced dataset
     crop = None  # crop = (32, 96)
     as_dict = False
     inputs, labels = load_data(datapath, glob_file_str, n_pieces, crop, as_dict,
                                patch_size=128)
     labels = encode_labels(labels, one_hot=True).astype(np.float32)
+    # scale to be [0, 2], then boolean matrix
+    inputs += 1
+    inputs = inputs.astype(bool)
+    print("Dataset shape {}".format(inputs.shape))
+    epochsize = len(inputs) / batchsize
 
     # Prepare Theano variables for inputs
     noise_var = T.fmatrix('noise')
@@ -187,12 +195,14 @@ def main(num_epochs=1000, epochsize=100, batchsize=64,
 
     # Compile functions performing a training step on a mini-batch (according
     # to the updates dictionary) and returning the corresponding score:
-    generator_train_fn = theano.function([cond_var], generator_score,
+    generator_train_fn = theano.function([cond_var],
+                                         generator_score,
                                          givens={noise_var: noise},
                                          updates=generator_updates)
-    crepe_critic_train_fn = theano.function([input_var, cond_var], crepe_critic_score,
-                                      givens={noise_var: noise},
-                                      updates=crepe_critic_updates)
+    crepe_critic_train_fn = theano.function([input_var, cond_var],
+                                            crepe_critic_score,
+                                            givens={noise_var: noise},
+                                            updates=crepe_critic_updates)
 
     # Compile another function generating some data
     gen_fn = theano.function([noise_var, cond_var],
@@ -206,7 +216,6 @@ def main(num_epochs=1000, epochsize=100, batchsize=64,
                                   length=0, forever=True)
     # We iterate over epochs:
     generator_updates = 0
-    k = 0
     epoch_crepe_critic_scores = []
     epoch_generator_scores = []
     for epoch in range(num_epochs):
@@ -239,24 +248,26 @@ def main(num_epochs=1000, epochsize=100, batchsize=64,
         epoch_generator_scores.append(np.mean(crepe_critic_scores))
 
         fig, axes = plt.subplots(1, 2, figsize=(8, 2))
-        axes[0].set_title('Loss(d)')
+        axes[0].set_title('Loss(C)')
         axes[0].plot(epoch_crepe_critic_scores)
-        axes[1].set_title('Mean(Loss(d))')
+        axes[1].set_title('Loss(G)')
         axes[1].plot(epoch_generator_scores)
         fig.tight_layout()
-        fig.savefig('images/wcgan_proll/g_updates{}'.format(epoch))
+        fig.savefig('images/wccrepe_gan_proll/g_updates{}'.format(epoch))
         plt.close('all')
 
-        if generator_updates % 500 == 0:
-            # And finally, we plot some generated data
-            samples = gen_fn(lasagne.utils.floatX(np.random.rand(42, 100)),
-                             batch_cond[:42])
-            plt.imsave('images/wccrepe_gan_proll/wcgan_gits{}.png'.format(epoch),
-                    (samples.reshape(6, 7, 128, 128)
-                            .transpose(0, 2, 1, 3)
-                            .reshape(6*128, 7*128)).T,
-                    cmap='gray')
-            k += 1
+        # plot and create midi from generated data
+        samples = gen_fn(lasagne.utils.floatX(np.random.rand(42, 100)),
+                         batch_cond[:42])
+        plt.imsave('images/wccrepe_gan_proll/wccgan_gits{}.png'.format(epoch),
+                   (samples.reshape(6, 7, 128, 128)
+                           .transpose(0, 2, 1, 3)
+                           .reshape(6*128, 7*128)).T,
+                   cmap='gray')
+        for i in range(min(MIDI_SAPLES, len(samples))):
+            pianoroll_to_midi(
+                samples[i][0], FS,
+                filename='midi/wccrepe_gan_proll/wccgan_{}_gits{}.midi'.format(i, epoch))
 
         # After half the epochs, we start decaying the learn rate towards zero
         if epoch >= num_epochs // 2:
