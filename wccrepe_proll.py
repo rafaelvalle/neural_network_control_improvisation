@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Example employing Lasagne for piano roll using the MIDI files from classical
-piano music
+Example employing Lasagne for piano roll generation
 Crepe
 https://github.com/Azure/Cortana-Intelligence-Gallery-Content/blob/master/Tutorials/Deep-Learning-for-Text-Classification-in-Azure/python/03%20-%20Crepe%20-%20Amazon%20(advc).py
 
@@ -27,22 +26,22 @@ import theano.tensor as T
 import lasagne
 
 from data_processing import load_data, encode_labels
-from music_utils import pianoroll_to_midi
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
 from tqdm import tqdm
 
 import pdb
 
 NUM_FILTERS = 256
+NOISE_SIZE = 512
 
 
-def build_generator(input_var, cond_var, n_conds):
+def build_generator(input_var, cond_var, n_conds, arch=0):
     from lasagne.layers import InputLayer, ReshapeLayer, DenseLayer, ConcatLayer
     try:
         from lasagne.layers import TransposedConv2DLayer as Deconv2DLayer
+        from lasagne.layers import Conv2DLayer
     except ImportError:
         raise ImportError("Your Lasagne is too old. Try the bleeding-edge "
                           "version: http://lasagne.readthedocs.io/en/latest/"
@@ -51,22 +50,53 @@ def build_generator(input_var, cond_var, n_conds):
         from lasagne.layers.dnn import batch_norm_dnn as batch_norm
     except ImportError:
         from lasagne.layers import batch_norm
-    from lasagne.nonlinearities import tanh
-    # input: 100dim
-    layer_in = InputLayer(shape=(None, 100), input_var=input_var)
+    from lasagne.nonlinearities import tanh, rectify
+
+    # temperature tanh
+    def tanh_temperature(x, temperature=2):
+        return tanh(x * temperature)
+
+    # input
+    layer_in = InputLayer(shape=(None, NOISE_SIZE), input_var=input_var)
     cond_in = InputLayer(shape=(None, n_conds), input_var=cond_var)
     layer = ConcatLayer([layer_in, cond_in])
+    if arch == 0:
+        # fully-connected layer
+        layer = batch_norm(DenseLayer(layer, 1024))
+        # project and reshape
+        layer = batch_norm(DenseLayer(layer, 128*32*32))
+        layer = ReshapeLayer(layer, ([0], 128, 32, 32))
+        # two fractional-stride convolutions
+        layer = batch_norm(Deconv2DLayer(
+            layer, 128, 5, stride=2, crop='same', output_size=64))
+        layer = Deconv2DLayer(
+            layer, 1, 5, stride=2, crop='same', output_size=128,
+            nonlinearity=tanh_temperature)
+    elif arch == 1:
+        # fully-connected layer
+        layer = batch_norm(DenseLayer(layer, 1024))
+        # project and reshape
+        layer = batch_norm(DenseLayer(layer, 256*3*1))
+        layer = ReshapeLayer(layer, ([0], 256, 3, 1))
+        # temporal convolutions
+        layer = batch_norm(Conv2DLayer(
+            layer, NUM_FILTERS, (3, 1), stride=1, nonlinearity=rectify))
+        layer = batch_norm(Conv2DLayer(
+            layer, NUM_FILTERS, (3, 1), stride=1, nonlinearity=rectify))
+        layer = batch_norm(Conv2DLayer(
+            layer, NUM_FILTERS, (3, 1), stride=1, nonlinearity=rectify))
+        layer = batch_norm(Conv2DLayer(
+            layer, NUM_FILTERS, (3, 1), stride=1, nonlinearity=rectify))
+        layer = batch_norm(Conv2DLayer(
+            layer, NUM_FILTERS, (7, 1), stride=0, nonlinearity=rectify))
+        # words from characters
+        layer = batch_norm(Deconv2DLayer(
+            layer, NUM_FILTERS, (7, 128), stride=0, crop='valid', nonlinearity=rectify))
+        layer = Deconv2DLayer(
+            layer, 1, (128, 128), stride=0, crop='valid', nonlinearity=tanh)
+    else:
+        return None
 
-    # fully-connected layer
-    layer = batch_norm(DenseLayer(layer, 1024))
-    # project and reshape
-    layer = batch_norm(DenseLayer(layer, 128*32*32))
-    layer = ReshapeLayer(layer, ([0], 128, 32, 32))
-    # two fractional-stride convolutions
-    layer = batch_norm(Deconv2DLayer(layer, 128, 5, stride=2, crop='same',
-                                     output_size=64))
-    layer = Deconv2DLayer(layer, 1, 5, stride=2, crop='same', output_size=128,
-                          nonlinearity=tanh)
     print("Generator output:", layer.output_shape)
     return layer
 
@@ -82,12 +112,13 @@ def build_crepe_critic(input_var=None):
 
     # input: (None, 1, 128, 128)
     layer = InputLayer(shape=(None, 1, 128, 128), input_var=input_var)
+    # form words from characters
     layer = Conv2DLayer(layer, NUM_FILTERS, (7, 128), nonlinearity=rectify)
     layer = MaxPool2DLayer(layer, (3, 1))
-
+    # temporal convolution, 7-gram
     layer = Conv2DLayer(layer, NUM_FILTERS, (7, 1), nonlinearity=rectify)
-    layer = MaxPool2DLayer(layer, (3,1))
-
+    layer = MaxPool2DLayer(layer, (3, 1))
+    # temporal convolution, 3-gram
     layer = Conv2DLayer(layer, NUM_FILTERS, (3, 1), nonlinearity=rectify)
     layer = Conv2DLayer(layer, NUM_FILTERS, (3, 1), nonlinearity=rectify)
     layer = Conv2DLayer(layer, NUM_FILTERS, (3, 1), nonlinearity=rectify)
@@ -134,7 +165,7 @@ def iterate_minibatches(inputs, labels, batchsize, shuffle=True, forever=True,
             break
 
 
-def main(num_epochs=100, epochsize=100, batchsize=512, initial_eta=1e-4,
+def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=1e-4,
          clip=0.01):
     # Load the dataset
     print("Loading data...")
@@ -192,7 +223,7 @@ def main(num_epochs=100, epochsize=100, batchsize=512, initial_eta=1e-4,
     # Instantiate a symbolic noise generator to use for training
     from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
     srng = RandomStreams(seed=np.random.randint(2147462579, size=6))
-    noise = srng.uniform((batchsize, 100))
+    noise = srng.uniform((batchsize, NOISE_SIZE))
 
     # Compile functions performing a training step on a mini-batch (according
     # to the updates dictionary) and returning the corresponding score:
@@ -258,14 +289,14 @@ def main(num_epochs=100, epochsize=100, batchsize=512, initial_eta=1e-4,
         plt.close('all')
 
         # plot and create midi from generated data
-        samples = gen_fn(lasagne.utils.floatX(np.random.rand(42, 100)),
+        samples = gen_fn(lasagne.utils.floatX(np.random.rand(42, NOISE_SIZE)),
                          batch_cond[:42])
         plt.imsave('images/wccrepe_gan_proll/wccgan_gits{}.png'.format(epoch),
                    (samples.reshape(6, 7, 128, 128)
                            .transpose(0, 2, 1, 3)
                            .reshape(6*128, 7*128)).T,
                    cmap='gray')
-        np.save('midi/wccrepe_gan_proll/wccgan_gits{}.midi'.format(epoch),
+        np.save('midi/wccrepe_gan_proll/wccgan_gits{}.npy'.format(epoch),
                 samples)
 
         # After half the epochs, we start decaying the learn rate towards zero
