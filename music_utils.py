@@ -5,7 +5,7 @@ import pretty_midi as pm
 
 def pianoroll_to_midi(pianoroll, fs, program=1, filepath='midifile.mid'):
     # create PrettyMIDI object
-    midifile = pm.PrettyMIDI()
+    midifile = pm.PrettyMIDI(resolution=fs, initial_tempo=60 / (4.0/fs))
     # create Instrument instance
     if type(program) is not int:
         program = pm.instrument_name_to_program(program)
