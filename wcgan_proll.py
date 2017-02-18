@@ -24,7 +24,6 @@ import theano.tensor as T
 import lasagne
 
 from data_processing import load_data, encode_labels
-from music_utils import pianoroll_to_midi
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -33,9 +32,19 @@ from tqdm import tqdm
 
 import pdb
 
+NOISE_SIZE = 100
+NUM_FILTERS = 256
 
-def build_generator(input_var, cond_var, n_conds):
+
+# temperature tanh
+def tanh_temperature(x, temperature=2):
+    from lasagne.nonlinearities import tanh
+    return tanh(x * temperature)
+
+
+def build_generator(input_var, cond_var, n_conds, arch=0):
     from lasagne.layers import InputLayer, ReshapeLayer, DenseLayer, ConcatLayer
+    from lasagne.layers import Upscale2DLayer
     try:
         from lasagne.layers import TransposedConv2DLayer as Deconv2DLayer
     except ImportError:
@@ -46,22 +55,50 @@ def build_generator(input_var, cond_var, n_conds):
         from lasagne.layers.dnn import batch_norm_dnn as batch_norm
     except ImportError:
         from lasagne.layers import batch_norm
-    from lasagne.nonlinearities import tanh
+    from lasagne.nonlinearities import tanh, rectify
     # input: 100dim
-    layer_in = InputLayer(shape=(None, 100), input_var=input_var)
+    layer_in = InputLayer(shape=(None, NOISE_SIZE), input_var=input_var)
     cond_in = InputLayer(shape=(None, n_conds), input_var=cond_var)
     layer = ConcatLayer([layer_in, cond_in])
-
-    # fully-connected layer
-    layer = batch_norm(DenseLayer(layer, 1024))
-    # project and reshape
-    layer = batch_norm(DenseLayer(layer, 128*32*32))
-    layer = ReshapeLayer(layer, ([0], 128, 32, 32))
-    # two fractional-stride convolutions
-    layer = batch_norm(Deconv2DLayer(layer, 128, 5, stride=2, crop='same',
-                                     output_size=64))
-    layer = Deconv2DLayer(layer, 1, 5, stride=2, crop='same', output_size=128,
-                          nonlinearity=tanh)
+    if arch == 0:
+        # fully-connected layer
+        layer = batch_norm(DenseLayer(layer, 1024))
+        # project and reshape
+        layer = batch_norm(DenseLayer(layer, 128*32*32))
+        layer = ReshapeLayer(layer, ([0], 128, 32, 32))
+        # two fractional-stride convolutions
+        layer = batch_norm(Deconv2DLayer(layer, 128, 5, stride=2, crop='same',
+                                         output_size=64))
+        layer = Deconv2DLayer(
+            layer, 1, 5, stride=2, crop='same', output_size=128,
+            nonlinearity=tanh)
+    elif arch == 1:
+        # inverted crepe
+        # fully-connected layer
+        layer = batch_norm(DenseLayer(layer, 1024))
+        # project and reshape
+        layer = batch_norm(DenseLayer(layer, NUM_FILTERS*3*1))
+        layer = ReshapeLayer(layer, ([0], NUM_FILTERS, 3, 1))
+        # temporal convolutions
+        layer = batch_norm(Deconv2DLayer(
+            layer, NUM_FILTERS, (3, 1), stride=1, crop=0,
+            nonlinearity=rectify))
+        layer = batch_norm(Deconv2DLayer(
+            layer, NUM_FILTERS, (3, 1), stride=1, crop=0,
+            nonlinearity=rectify))
+        layer = batch_norm(Deconv2DLayer(
+            layer, NUM_FILTERS, (3, 1), stride=1, crop=0,
+            nonlinearity=rectify))
+        layer = batch_norm(Deconv2DLayer(
+            layer, NUM_FILTERS, (3, 1), stride=1, crop=0,
+            nonlinearity=rectify))
+        layer = Upscale2DLayer(layer, (3, 1), mode='repeat')
+        layer = Deconv2DLayer(layer, 1, (9, 1), stride=1, crop=0)
+        layer = Upscale2DLayer(layer, (3, 1), mode='repeat')
+        layer = Deconv2DLayer(layer, 1, (6, 128), stride=1, crop=0,
+                              nonlinearity=tanh_temperature)
+    else:
+        return None
     print("Generator output:", layer.output_shape)
     return layer
 
@@ -117,11 +154,11 @@ def iterate_minibatches(inputs, labels, batchsize, shuffle=True, forever=True,
             break
 
 
-def main(num_epochs=1000, epochsize=100, batchsize=64,
-         initial_eta=1e-2, clip=0.01):
+def main(num_epochs=50, epochsize=100, batchsize=64, initial_eta=1e-3,
+         clip=0.01):
     # Load the dataset
     print("Loading data...")
-    datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Piano'
+    datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/JazzSolos'
     glob_file_str = '*.npy'
     n_pieces = 0  # 0 is equal to all pieces, unbalanced dataset
     crop = None  # crop = (32, 96)
@@ -222,9 +259,9 @@ def main(num_epochs=1000, epochsize=100, batchsize=64,
         epoch_generator_scores.append(np.mean(critic_scores))
 
         fig, axes = plt.subplots(1, 2, figsize=(8, 2))
-        axes[0].set_title('Loss(d)')
+        axes[0].set_title('Loss(C)')
         axes[0].plot(epoch_critic_scores)
-        axes[1].set_title('Mean(Loss(d))')
+        axes[1].set_title('Loss(G)')
         axes[1].plot(epoch_generator_scores)
         fig.tight_layout()
         fig.savefig('images/wcgan_proll/g_updates{}'.format(epoch))
@@ -232,15 +269,17 @@ def main(num_epochs=1000, epochsize=100, batchsize=64,
 
         if generator_updates % 500 == 0:
             # And finally, we plot some generated data
-            samples = gen_fn(lasagne.utils.floatX(np.random.rand(42, 100)),
-                             batch_cond[:42])
+            samples = gen_fn(
+                lasagne.utils.floatX(np.random.rand(42, NOISE_SIZE)),
+                batch_cond[:42])
             plt.imsave('images/wcgan_proll/wcgan_gits{}.png'.format(epoch),
-                    (samples.reshape(6, 7, 128, 128)
-                            .transpose(0, 2, 1, 3)
-                            .reshape(6*128, 7*128)).T,
-                    cmap='gray')
+                       (samples.reshape(6, 7, 128, 128)
+                               .transpose(0, 2, 1, 3)
+                               .reshape(6*128, 7*128)).T,
+                       origin='bottom',
+                       cmap='gray')
             # save samples to disk
-            np.save('midi/wcgan_proll/wcgan_gits{}.midi'.format(epoch), samples)
+            np.save('midi/wcgan_proll/wcgan_gits{}.npy'.format(epoch), samples)
 
         # After half the epochs, we start decaying the learn rate towards zero
         # if epoch >= num_epochs // 2:
