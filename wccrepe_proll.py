@@ -37,11 +37,17 @@ NUM_FILTERS = 256
 NOISE_SIZE = 512
 
 
-def build_generator(input_var, cond_var, n_conds, arch=0):
+# temperature tanh
+def tanh_temperature(x, temperature=2):
+    from lasagne.nonlinearities import tanh
+    return tanh(x * temperature)
+
+
+def build_generator(input_var, cond_var, n_conds, arch=1):
     from lasagne.layers import InputLayer, ReshapeLayer, DenseLayer, ConcatLayer
+    from lasagne.layers import Upscale2DLayer
     try:
         from lasagne.layers import TransposedConv2DLayer as Deconv2DLayer
-        from lasagne.layers import Conv2DLayer
     except ImportError:
         raise ImportError("Your Lasagne is too old. Try the bleeding-edge "
                           "version: http://lasagne.readthedocs.io/en/latest/"
@@ -50,11 +56,7 @@ def build_generator(input_var, cond_var, n_conds, arch=0):
         from lasagne.layers.dnn import batch_norm_dnn as batch_norm
     except ImportError:
         from lasagne.layers import batch_norm
-    from lasagne.nonlinearities import tanh, rectify
-
-    # temperature tanh
-    def tanh_temperature(x, temperature=2):
-        return tanh(x * temperature)
+    from lasagne.nonlinearities import rectify, tanh
 
     # input
     layer_in = InputLayer(shape=(None, NOISE_SIZE), input_var=input_var)
@@ -63,37 +65,39 @@ def build_generator(input_var, cond_var, n_conds, arch=0):
     if arch == 0:
         # fully-connected layer
         layer = batch_norm(DenseLayer(layer, 1024))
+        layer = batch_norm(DenseLayer(layer, 1024))
         # project and reshape
-        layer = batch_norm(DenseLayer(layer, 128*32*32))
-        layer = ReshapeLayer(layer, ([0], 128, 32, 32))
+        layer = batch_norm(DenseLayer(layer, 128*34*34))
+        layer = ReshapeLayer(layer, ([0], 128, 34, 34))
         # two fractional-stride convolutions
-        layer = batch_norm(Deconv2DLayer(
-            layer, 128, 5, stride=2, crop='same', output_size=64))
+        layer = batch_norm(Deconv2DLayer(layer, 128, 5, stride=2, crop='same'))
         layer = Deconv2DLayer(
-            layer, 1, 5, stride=2, crop='same', output_size=128,
-            nonlinearity=tanh_temperature)
+            layer, 1, 6, stride=2, crop='full', nonlinearity=tanh_temperature)
     elif arch == 1:
+        # inverted crepe
         # fully-connected layer
         layer = batch_norm(DenseLayer(layer, 1024))
         # project and reshape
         layer = batch_norm(DenseLayer(layer, 256*3*1))
         layer = ReshapeLayer(layer, ([0], 256, 3, 1))
         # temporal convolutions
-        layer = batch_norm(Conv2DLayer(
-            layer, NUM_FILTERS, (3, 1), stride=1, nonlinearity=rectify))
-        layer = batch_norm(Conv2DLayer(
-            layer, NUM_FILTERS, (3, 1), stride=1, nonlinearity=rectify))
-        layer = batch_norm(Conv2DLayer(
-            layer, NUM_FILTERS, (3, 1), stride=1, nonlinearity=rectify))
-        layer = batch_norm(Conv2DLayer(
-            layer, NUM_FILTERS, (3, 1), stride=1, nonlinearity=rectify))
-        layer = batch_norm(Conv2DLayer(
-            layer, NUM_FILTERS, (7, 1), stride=0, nonlinearity=rectify))
-        # words from characters
         layer = batch_norm(Deconv2DLayer(
-            layer, NUM_FILTERS, (7, 128), stride=0, crop='valid', nonlinearity=rectify))
-        layer = Deconv2DLayer(
-            layer, 1, (128, 128), stride=0, crop='valid', nonlinearity=tanh)
+            layer, NUM_FILTERS, (3, 1), stride=1, crop=0,
+            nonlinearity=rectify))
+        layer = batch_norm(Deconv2DLayer(
+            layer, NUM_FILTERS, (3, 1), stride=1, crop=0,
+            nonlinearity=rectify))
+        layer = batch_norm(Deconv2DLayer(
+            layer, NUM_FILTERS, (3, 1), stride=1, crop=0,
+            nonlinearity=rectify))
+        layer = batch_norm(Deconv2DLayer(
+            layer, NUM_FILTERS, (3, 1), stride=1, crop=0,
+            nonlinearity=rectify))
+        layer = Upscale2DLayer(layer, (3, 1), mode='repeat')
+        layer = Deconv2DLayer(layer, 1, (9, 1), stride=1, crop=0)
+        layer = Upscale2DLayer(layer, (3, 1), mode='repeat')
+        layer = Deconv2DLayer(layer, 1, (6, 128), stride=1, crop=0,
+                              nonlinearity=tanh_temperature)
     else:
         return None
 
@@ -165,7 +169,7 @@ def iterate_minibatches(inputs, labels, batchsize, shuffle=True, forever=True,
             break
 
 
-def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=1e-4,
+def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=5e-5,
          clip=0.01):
     # Load the dataset
     print("Loading data...")
@@ -295,6 +299,7 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=1e-4,
                    (samples.reshape(6, 7, 128, 128)
                            .transpose(0, 2, 1, 3)
                            .reshape(6*128, 7*128)).T,
+                   origin='bottom',
                    cmap='gray')
         np.save('midi/wccrepe_gan_proll/wccgan_gits{}.npy'.format(epoch),
                 samples)
