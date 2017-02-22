@@ -15,6 +15,10 @@ https://gist.github.com/f0k/f3190ebba6c53887d598d03119ca2066
 """
 
 from __future__ import print_function
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 import sys
 import time
@@ -22,123 +26,20 @@ import time
 import numpy as np
 import theano
 import theano.tensor as T
-
 import lasagne
-
+from models import build_generator, build_critic
 from data_processing import load_data, encode_labels
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from tqdm import tqdm
-
 import pdb
 
 NUM_FILTERS = 256
 NOISE_SIZE = 512
-
+CRITIC_ARCH = 0
+GENERATOR_ARCH = 0
 
 # temperature tanh
-def tanh_temperature(x, temperature=2):
+def tanh_temperature(x, temperature=1):
     from lasagne.nonlinearities import tanh
     return tanh(x * temperature)
-
-
-def build_generator(input_var, cond_var, n_conds, arch=1):
-    from lasagne.layers import InputLayer, ReshapeLayer, DenseLayer, ConcatLayer
-    from lasagne.layers import Upscale2DLayer
-    try:
-        from lasagne.layers import TransposedConv2DLayer as Deconv2DLayer
-    except ImportError:
-        raise ImportError("Your Lasagne is too old. Try the bleeding-edge "
-                          "version: http://lasagne.readthedocs.io/en/latest/"
-                          "user/installation.html#bleeding-edge-version")
-    try:
-        from lasagne.layers.dnn import batch_norm_dnn as batch_norm
-    except ImportError:
-        from lasagne.layers import batch_norm
-    from lasagne.nonlinearities import rectify, tanh
-
-    # input
-    layer_in = InputLayer(shape=(None, NOISE_SIZE), input_var=input_var)
-    cond_in = InputLayer(shape=(None, n_conds), input_var=cond_var)
-    layer = ConcatLayer([layer_in, cond_in])
-    if arch == 0:
-        # fully-connected layer
-        layer = batch_norm(DenseLayer(layer, 1024))
-        layer = batch_norm(DenseLayer(layer, 1024))
-        # project and reshape
-        layer = batch_norm(DenseLayer(layer, 128*34*34))
-        layer = ReshapeLayer(layer, ([0], 128, 34, 34))
-        # two fractional-stride convolutions
-        layer = batch_norm(Deconv2DLayer(layer, 128, 5, stride=2, crop='same'))
-        layer = Deconv2DLayer(
-            layer, 1, 6, stride=2, crop='full', nonlinearity=tanh_temperature)
-    elif arch == 1:
-        # inverted crepe
-        # fully-connected layer
-        layer = batch_norm(DenseLayer(layer, 1024))
-        # project and reshape
-        layer = batch_norm(DenseLayer(layer, 256*3*1))
-        layer = ReshapeLayer(layer, ([0], 256, 3, 1))
-        # temporal convolutions
-        layer = batch_norm(Deconv2DLayer(
-            layer, NUM_FILTERS, (3, 1), stride=1, crop=0,
-            nonlinearity=rectify))
-        layer = batch_norm(Deconv2DLayer(
-            layer, NUM_FILTERS, (3, 1), stride=1, crop=0,
-            nonlinearity=rectify))
-        layer = batch_norm(Deconv2DLayer(
-            layer, NUM_FILTERS, (3, 1), stride=1, crop=0,
-            nonlinearity=rectify))
-        layer = batch_norm(Deconv2DLayer(
-            layer, NUM_FILTERS, (3, 1), stride=1, crop=0,
-            nonlinearity=rectify))
-        layer = Upscale2DLayer(layer, (3, 1), mode='repeat')
-        layer = Deconv2DLayer(layer, 1, (9, 1), stride=1, crop=0)
-        layer = Upscale2DLayer(layer, (3, 1), mode='repeat')
-        layer = Deconv2DLayer(layer, 1, (6, 128), stride=1, crop=0,
-                              nonlinearity=tanh_temperature)
-    else:
-        return None
-
-    print("Generator output:", layer.output_shape)
-    return layer
-
-
-def build_crepe_critic(input_var=None):
-    from lasagne.layers import (InputLayer, Conv2DLayer, DenseLayer,
-                                MaxPool2DLayer, flatten, dropout)
-    try:
-        from lasagne.layers.dnn import batch_norm_dnn as batch_norm
-    except ImportError:
-        from lasagne.layers import batch_norm
-    from lasagne.nonlinearities import rectify
-
-    # input: (None, 1, 128, 128)
-    layer = InputLayer(shape=(None, 1, 128, 128), input_var=input_var)
-    # form words from characters
-    layer = Conv2DLayer(layer, NUM_FILTERS, (7, 128), nonlinearity=rectify)
-    layer = MaxPool2DLayer(layer, (3, 1))
-    # temporal convolution, 7-gram
-    layer = Conv2DLayer(layer, NUM_FILTERS, (7, 1), nonlinearity=rectify)
-    layer = MaxPool2DLayer(layer, (3, 1))
-    # temporal convolution, 3-gram
-    layer = Conv2DLayer(layer, NUM_FILTERS, (3, 1), nonlinearity=rectify)
-    layer = Conv2DLayer(layer, NUM_FILTERS, (3, 1), nonlinearity=rectify)
-    layer = Conv2DLayer(layer, NUM_FILTERS, (3, 1), nonlinearity=rectify)
-    layer = Conv2DLayer(layer, NUM_FILTERS, (3, 1), nonlinearity=rectify)
-    layer = flatten(layer)
-
-    # fully-connected layer
-    layer = dropout(DenseLayer(layer, 1024, nonlinearity=rectify))
-
-    # fully-connected layer
-    layer = dropout(DenseLayer(layer, 1024, nonlinearity=rectify))
-
-    # output layer (linear and without bias)
-    layer = DenseLayer(layer, 1, nonlinearity=None, b=None)
-    print("crepe_critic output:", layer.output_shape)
-    return layer
 
 
 def iterate_minibatches(inputs, labels, batchsize, shuffle=True, forever=True,
@@ -169,8 +70,8 @@ def iterate_minibatches(inputs, labels, batchsize, shuffle=True, forever=True,
             break
 
 
-def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=5e-5,
-         clip=0.01):
+def main(num_epochs=100, epochsize=100, batchsize=64, initial_eta=1e-5,
+         clip=0.01, boolean=False):
     # Load the dataset
     print("Loading data...")
     datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/JazzSolos'
@@ -181,11 +82,13 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=5e-5,
     inputs, labels = load_data(datapath, glob_file_str, n_pieces, crop, as_dict,
                                patch_size=128)
     labels = encode_labels(labels, one_hot=True).astype(np.float32)
-    # scale to be [0, 2], then boolean matrix
-    inputs += 1
-    inputs = inputs.astype(bool)
-    # convert back [-1, 1]
-    inputs = (inputs.astype(np.float32) * 2) - 1
+    if boolean:
+        # scale to be [0, 2], then boolean matrix
+        inputs += inputs.min()
+        inputs = inputs.astype(bool)
+        inputs /= inputs.max()
+        # convert back [-1, 1]
+        inputs = (inputs.astype(np.float32) * 2) - 1
 
     print("Dataset shape {}".format(inputs.shape))
     epochsize = len(inputs) / batchsize
@@ -197,8 +100,9 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=5e-5,
 
     # Create neural network model
     print("Building model and compiling functions...")
-    generator = build_generator(noise_var, cond_var, labels.shape[1])
-    crepe_critic = build_crepe_critic(input_var)
+    generator = build_generator(
+        noise_var, cond_var, labels.shape[1], NOISE_SIZE, GENERATOR_ARCH)
+    crepe_critic = build_critic(input_var, CRITIC_ARCH)
 
     # Create expression for passing real data through the crepe_critic
     real_out = lasagne.layers.get_output(crepe_critic)
@@ -305,9 +209,9 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=5e-5,
                 samples)
 
         # After half the epochs, we start decaying the learn rate towards zero
-        # if epoch >= num_epochs // 2:
-        #     progress = float(epoch) / num_epochs
-        #     eta.set_value(lasagne.utils.floatX(initial_eta*2*(1 - progress)))
+        if epoch >= num_epochs // 2:
+            progress = float(epoch) / num_epochs
+            eta.set_value(lasagne.utils.floatX(initial_eta*2*(1 - progress)))
 
     # Optionally, you could now dump the network weights to a file like this:
     # np.savez('wcgan_proll_gen.npz', *lasagne.layers.get_all_param_values(generator))
