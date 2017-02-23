@@ -23,7 +23,7 @@ def encode_labels(labels, one_hot=False):
 
 
 def load_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
-              scale=True, patch_size=False, encoded_labels=True):
+              scale=True, patch_size=False):
 
     data = defaultdict(list)
     if not as_dict:
