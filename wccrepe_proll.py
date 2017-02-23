@@ -20,10 +20,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-import sys
 import time
+import argparse
 
 import numpy as np
+np.random.seed(1234)
 import theano
 import theano.tensor as T
 import lasagne
@@ -31,15 +32,9 @@ from models import build_generator, build_critic
 from data_processing import load_data, encode_labels
 import pdb
 
-NUM_FILTERS = 256
-NOISE_SIZE = 512
-CRITIC_ARCH = 0
-GENERATOR_ARCH = 0
-
-# temperature tanh
-def tanh_temperature(x, temperature=1):
-    from lasagne.nonlinearities import tanh
-    return tanh(x * temperature)
+NOISE_SIZE = 256
+CRITIC_ARCH = 2
+GENERATOR_ARCH = 1
 
 
 def iterate_minibatches(inputs, labels, batchsize, shuffle=True, forever=True,
@@ -70,7 +65,7 @@ def iterate_minibatches(inputs, labels, batchsize, shuffle=True, forever=True,
             break
 
 
-def main(num_epochs=100, epochsize=100, batchsize=64, initial_eta=1e-5,
+def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=2e-3,
          clip=0.01, boolean=False):
     # Load the dataset
     print("Loading data...")
@@ -79,19 +74,26 @@ def main(num_epochs=100, epochsize=100, batchsize=64, initial_eta=1e-5,
     n_pieces = 0  # 0 is equal to all pieces, unbalanced dataset
     crop = None  # crop = (32, 96)
     as_dict = False
-    inputs, labels = load_data(datapath, glob_file_str, n_pieces, crop, as_dict,
-                               patch_size=128)
+    inputs, labels = load_data(
+        datapath, glob_file_str, n_pieces, crop, as_dict, patch_size=128)
     labels = encode_labels(labels, one_hot=True).astype(np.float32)
     if boolean:
-        # scale to be [0, 2], then boolean matrix
         inputs += inputs.min()
         inputs = inputs.astype(bool)
         inputs /= inputs.max()
-        # convert back [-1, 1]
-        inputs = (inputs.astype(np.float32) * 2) - 1
+        # project to [-1, 1]
+        inputs = lasagne.utils.floatX((inputs * 2) - 1)
 
     print("Dataset shape {}".format(inputs.shape))
     epochsize = len(inputs) / batchsize
+
+    # create fixed conditions and noise for output evaluation
+    N_PER_CONDITION = 2
+    N_SAMPLES_GEN = labels.shape[1]
+    FIXED_CONDITION = np.eye(N_SAMPLES_GEN)[
+        np.repeat(np.arange(N_SAMPLES_GEN), N_PER_CONDITION)]
+    FIXED_NOISE = lasagne.utils.floatX(
+        np.random.rand(N_SAMPLES_GEN*N_PER_CONDITION, NOISE_SIZE))
 
     # Prepare Theano variables for inputs
     noise_var = T.fmatrix('noise')
@@ -171,7 +173,7 @@ def main(num_epochs=100, epochsize=100, batchsize=64, initial_eta=1e-5,
             if (generator_updates < 25) or (generator_updates % 500 == 0):
                 crepe_critic_runs = 100
             else:
-                crepe_critic_runs = 5
+                crepe_critic_runs = 20 #5
             for _ in range(crepe_critic_runs):
                 batch_in, batch_cond = next(batches)
                 # reshape batch to proper dimensions
@@ -197,16 +199,15 @@ def main(num_epochs=100, epochsize=100, batchsize=64, initial_eta=1e-5,
         plt.close('all')
 
         # plot and create midi from generated data
-        samples = gen_fn(lasagne.utils.floatX(np.random.rand(42, NOISE_SIZE)),
-                         batch_cond[:42])
+        samples = gen_fn(FIXED_NOISE, FIXED_CONDITION)
         plt.imsave('images/wccrepe_gan_proll/wccgan_gits{}.png'.format(epoch),
-                   (samples.reshape(6, 7, 128, 128)
+                   (samples.reshape(N_PER_CONDITION, N_SAMPLES_GEN, 128, 128)
                            .transpose(0, 2, 1, 3)
-                           .reshape(6*128, 7*128)).T,
+                           .reshape(N_PER_CONDITION*128, N_SAMPLES_GEN*128)).T,
                    origin='bottom',
                    cmap='gray')
-        np.save('midi/wccrepe_gan_proll/wccgan_gits{}.npy'.format(epoch),
-                samples)
+        np.save(
+            'midi/wccrepe_gan_proll/wccgan_gits{}.npy'.format(epoch), samples)
 
         # After half the epochs, we start decaying the learn rate towards zero
         if epoch >= num_epochs // 2:
@@ -224,18 +225,21 @@ def main(num_epochs=100, epochsize=100, batchsize=64, initial_eta=1e-5,
 
 
 if __name__ == '__main__':
-    if ('--help' in sys.argv) or ('-h' in sys.argv):
-        print("Trains a WCGAN on Piano Rolls using Lasagne.")
-        print("Usage: %s [EPOCHS [EPOCHSIZE]]" % sys.argv[0])
-        print()
-        print("EPOCHS: number of training epochs to perform (default: 1000)")
-        print("EPOCHSIZE: number of generator updates per epoch (default: 100)")
-    else:
-        kwargs = {}
-        if len(sys.argv) > 1:
-            kwargs['num_epochs'] = int(sys.argv[1])
-        if len(sys.argv) > 2:
-            kwargs['epochsize'] = int(sys.argv[2])
-        if len(sys.argv) > 3:
-            kwargs['initial_eta'] = float(sys.argv[3])
-        main(**kwargs)
+    parser = argparse.ArgumentParser(description="Trains WCGAN on Piano Roll")
+    parser.add_argument("-n", "--n_epochs", type=int, default=100,
+                        help="Number of tepochs")
+    parser.add_argument("-e", "--epoch_size", type=int, default=100,
+                        help="Epoch Size")
+    parser.add_argument("-m", "--bs", type=int, default=128,
+                        help="Mini-Batch Size")
+    parser.add_argument("-l", "--lr", type=float, default=2e-3,
+                        help="Learning Rate")
+    parser.add_argument("-c", "--clip", type=float, default=0.01,
+                        help="Clip weights")
+    parser.add_argument("-b", "--boolean", type=bool, default=0,
+                        help="Data as boolean")
+
+    args = parser.parse_args()
+    print(args)
+    main(args.n_epochs, args.epoch_size, args.bs, args.lr, args.clip,
+         args.boolean)
