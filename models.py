@@ -21,31 +21,31 @@ def build_generator(input_var, cond_var, n_conds, noise_size, arch=0):
         from lasagne.layers.dnn import batch_norm_dnn as batch_norm
     except ImportError:
         from lasagne.layers import batch_norm
-    from lasagne.nonlinearities import tanh, rectify, LeakyRectify
-    lrelu = LeakyRectify(0.2)
+    from lasagne.nonlinearities import LeakyRectify
+    lrelu = LeakyRectify(0.01)
 
     layer_in = InputLayer(shape=(None, noise_size), input_var=input_var)
     cond_in = InputLayer(shape=(None, n_conds), input_var=cond_var)
     layer = ConcatLayer([layer_in, cond_in])
     if arch == 0:
-        # DCGAN inspired
-        layer = batch_norm(DenseLayer(layer, 1024*4*4, nonlinearity=rectify))
+        # DCGAN
+        layer = batch_norm(DenseLayer(layer, 1024*4*4, nonlinearity=lrelu))
         layer = ReshapeLayer(layer, ([0], 1024, 4, 4))
         layer = batch_norm(Deconv2DLayer(
-            layer, 512, 6, stride=2, crop=(2, 2),
-            output_size=8, nonlinearity=rectify))
+            layer, 512, 5, stride=2, crop=(2, 2), b=None,
+            output_size=8, nonlinearity=lrelu))
         layer = batch_norm(Deconv2DLayer(
-            layer, 256, 6, stride=2, crop=(2, 2),
-            output_size=16, nonlinearity=rectify))
+            layer, 256, 5, stride=2, crop=(2, 2), b=None,
+            output_size=16, nonlinearity=lrelu))
         layer = batch_norm(Deconv2DLayer(
-            layer, 128, 6, stride=2, crop=(2, 2),
-            output_size=32, nonlinearity=rectify))
+            layer, 128, 5, stride=2, crop=(2, 2), b=None,
+            output_size=32, nonlinearity=lrelu))
         layer = batch_norm(Deconv2DLayer(
-            layer, 64, 6, stride=2, crop=(2, 2),
-            output_size=64, nonlinearity=rectify))
+            layer, 64, 5, stride=2, crop=(2, 2), b=None,
+            output_size=64, nonlinearity=lrelu))
         layer = batch_norm(Deconv2DLayer(
-            layer, 1, 6, stride=2, crop=(2, 2),
-            output_size=128, nonlinearity=tanh))
+            layer, 1, 5, stride=2, crop=(2, 2), b=None,
+            output_size=128, nonlinearity=tanh_temperature))
     elif arch == 1:
         # Jan Schluechter MNIST inspired
         # fully-connected layer
@@ -57,9 +57,10 @@ def build_generator(input_var, cond_var, n_conds, noise_size, arch=0):
         layer = ReshapeLayer(layer, ([0], 128, 34, 34))
         # two fractional-stride convolutions
         layer = batch_norm(Deconv2DLayer(
-            layer, 128, 5, stride=2, crop='same', nonlinearity=rectify))
+            layer, 128, 5, stride=2, crop='same', b=None, nonlinearity=lrelu))
         layer = Deconv2DLayer(
-            layer, 1, 6, stride=2, crop='full', nonlinearity=tanh_temperature)
+            layer, 1, 6, stride=2, crop='full', b=None,
+            nonlinearity=tanh_temperature)
     elif arch == 2:
         # non-overlapping transposed convolutions
         # fully-connected layer
@@ -67,12 +68,14 @@ def build_generator(input_var, cond_var, n_conds, noise_size, arch=0):
         # fully-connected layer
         layer = batch_norm(DenseLayer(layer, 1024))
         # project and reshape
-        layer = batch_norm(DenseLayer(layer, 256*25*25))
-        layer = ReshapeLayer(layer, ([0], 256, 25, 25))
+        layer = batch_norm(DenseLayer(layer, 256*36*36))
+        layer = ReshapeLayer(layer, ([0], 256, 36, 36))
         # two fractional-stride convolutions
-        layer = batch_norm(Deconv2DLayer(layer, 128, 4, stride=2, crop='full'))
+        layer = batch_norm(Deconv2DLayer(
+            layer, 128, 4, stride=2, crop='full', b=None, nonlinearity=lrelu))
         layer = Deconv2DLayer(
-            layer, 1, 9, stride=3, crop='full', nonlinearity=tanh_temperature)
+            layer, 1, 8, stride=2, crop='full', b=None,
+            nonlinearity=tanh_temperature)
     elif arch == 3:
         # resize-convolution, more full layer weights less convolutions
         # fully-connected layers
@@ -105,7 +108,7 @@ def build_generator(input_var, cond_var, n_conds, noise_size, arch=0):
         layer = batch_norm(Conv2DLayer(
             layer, 1, 5, stride=1, pad='valid', nonlinearity=tanh_temperature))
     elif arch == 5:
-        # transposed crepe
+        # CREPE transposed
         # fully-connected layer
         layer = batch_norm(DenseLayer(layer, 1024))
         # project and reshape
@@ -114,13 +117,13 @@ def build_generator(input_var, cond_var, n_conds, noise_size, arch=0):
         # temporal convolutions
         layer = batch_norm(Deconv2DLayer(
             layer, 256, (3, 1), stride=1, crop=0,
-            nonlinearity=rectify))
+            nonlinearity=lrelu))
         layer = batch_norm(Deconv2DLayer(
-            layer, 256, (3, 1), stride=1, crop=0, nonlinearity=rectify))
+            layer, 256, (3, 1), stride=1, crop=0, nonlinearity=lrelu))
         layer = batch_norm(Deconv2DLayer(
-            layer, 256, (3, 1), stride=1, crop=0, nonlinearity=rectify))
+            layer, 256, (3, 1), stride=1, crop=0, nonlinearity=lrelu))
         layer = batch_norm(Deconv2DLayer(
-            layer, 256, (3, 1), stride=1, crop=0, nonlinearity=rectify))
+            layer, 256, (3, 1), stride=1, crop=0, nonlinearity=lrelu))
         layer = Upscale2DLayer(layer, (3, 1), mode='repeat')
         layer = Deconv2DLayer(layer, 1, (9, 1), stride=1, crop=0)
         layer = Upscale2DLayer(layer, (3, 1), mode='repeat')
@@ -284,25 +287,37 @@ def build_critic(input_var=None, arch=0):
         from lasagne.layers import batch_norm
     from lasagne.nonlinearities import rectify, LeakyRectify
     lrelu = LeakyRectify(0.2)
+    layer = InputLayer(shape=(None, 1, 128, 128), input_var=input_var)
     if arch == 0:
-        # input: (None, 1, 28, 28)
-        layer = InputLayer(shape=(None, 1, 128, 128), input_var=input_var)
-        # two convolutions
-        layer = batch_norm(Conv2DLayer(layer, 64, 5, stride=2, pad='same',
-                                       nonlinearity=lrelu))
-        layer = batch_norm(Conv2DLayer(layer, 128, 5, stride=2, pad='same',
-                                       nonlinearity=lrelu))
+        # DCGAN inspired
+        layer = batch_norm(Conv2DLayer(
+            layer, 32, 4, stride=2, pad=1, b=None, nonlinearity=lrelu))
+        layer = batch_norm(Conv2DLayer(
+            layer, 64, 4, stride=2, pad=1, b=None, nonlinearity=lrelu))
+        layer = batch_norm(Conv2DLayer(
+            layer, 128, 4, stride=2, pad=1, b=None, nonlinearity=lrelu))
+        layer = batch_norm(Conv2DLayer(
+            layer, 256, 4, stride=2, pad=1, b=None, nonlinearity=lrelu))
+        layer = batch_norm(Conv2DLayer(
+            layer, 512, 4, stride=2, pad=1, b=None, nonlinearity=lrelu))
         # fully-connected layer
         layer = batch_norm(DenseLayer(layer, 1024, nonlinearity=lrelu))
-
     elif arch == 1:
-        # crepe critic
-        layer = InputLayer(shape=(None, 1, 128, 128), input_var=input_var)
-        # form words from characters
-        layer = Conv2DLayer(layer, 256, (7, 128), nonlinearity=lrelu)
+        # Jan Schluechter's MNIST discriminator
+        # two convolutions
+        layer = batch_norm(Conv2DLayer(
+            layer, 64, 5, stride=2, pad='same', nonlinearity=lrelu))
+        layer = batch_norm(Conv2DLayer(
+            layer, 128, 5, stride=2, pad='same', nonlinearity=lrelu))
+        # fully-connected layer
+        layer = batch_norm(DenseLayer(layer, 1024, nonlinearity=lrelu))
+    elif arch == 2:
+        # CREPE
+        # form words from sequence of characters
+        layer = Conv2DLayer(layer, 1024, (7, 128), nonlinearity=lrelu)
         layer = MaxPool2DLayer(layer, (3, 1))
         # temporal convolution, 7-gram
-        layer = Conv2DLayer(layer, 256, (7, 1), nonlinearity=lrelu)
+        layer = Conv2DLayer(layer, 512, (7, 1), nonlinearity=lrelu)
         layer = MaxPool2DLayer(layer, (3, 1))
         # temporal convolution, 3-gram
         layer = Conv2DLayer(layer, 256, (3, 1), nonlinearity=lrelu)
@@ -310,11 +325,8 @@ def build_critic(input_var=None, arch=0):
         layer = Conv2DLayer(layer, 256, (3, 1), nonlinearity=lrelu)
         layer = Conv2DLayer(layer, 256, (3, 1), nonlinearity=lrelu)
         layer = flatten(layer)
-
-        # fully-connected layer
+        # fully-connected layers
         layer = dropout(DenseLayer(layer, 1024, nonlinearity=rectify))
-
-        # fully-connected layer
         layer = dropout(DenseLayer(layer, 1024, nonlinearity=rectify))
     else:
         raise Exception("Model architecture {} is not supported".format(arch))
