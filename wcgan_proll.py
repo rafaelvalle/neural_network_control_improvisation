@@ -200,14 +200,14 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=2e-3,
 
         # plot and create midi from generated data
         samples = gen_fn(FIXED_NOISE, FIXED_CONDITION)
-        plt.imsave('images/wccrepe_gan_proll/wccgan_gits{}.png'.format(epoch),
+        plt.imsave('images/wcgan_proll/wcgan_gits{}.png'.format(epoch),
                    (samples.reshape(N_PER_CONDITION, N_SAMPLES_GEN, 128, 128)
                            .transpose(0, 2, 1, 3)
                            .reshape(N_PER_CONDITION*128, N_SAMPLES_GEN*128)).T,
                    origin='bottom',
                    cmap='gray')
         np.save(
-            'midi/wccrepe_gan_proll/wccgan_gits{}.npy'.format(epoch), samples)
+            'midi/wcgan_proll/wcgan_gits{}.npy'.format(epoch), samples)
 
         # After half the epochs, we start decaying the learn rate towards zero
         if epoch >= num_epochs // 2:
