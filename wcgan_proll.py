@@ -90,8 +90,8 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=2e-3,
     # create fixed conditions and noise for output evaluation
     N_PER_CONDITION = 2
     N_SAMPLES_GEN = labels.shape[1]
-    FIXED_CONDITION = np.eye(N_SAMPLES_GEN)[
-        np.repeat(np.arange(N_SAMPLES_GEN), N_PER_CONDITION)]
+    FIXED_CONDITION = lasagne.utils.floatX(np.eye(N_SAMPLES_GEN)[
+        np.repeat(np.arange(N_SAMPLES_GEN), N_PER_CONDITION)])
     FIXED_NOISE = lasagne.utils.floatX(
         np.random.rand(N_SAMPLES_GEN*N_PER_CONDITION, NOISE_SIZE))
 
