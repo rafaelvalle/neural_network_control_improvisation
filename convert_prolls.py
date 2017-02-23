@@ -14,7 +14,7 @@ def convert(globstr, fs, program, threshold, samples, boolean):
             proll = prolls[i]
             if len(proll.shape) == 3:
                 proll = proll[0]
-            if threshold is not None:
+            if threshold < proll.max():
                 proll[proll < threshold] = -1
             proll += abs(proll.min())
             if proll.max() != 0:
@@ -28,7 +28,8 @@ def convert(globstr, fs, program, threshold, samples, boolean):
                 proll, fs, program, filepath=filepath+'{}.midi'.format(i))
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("globstr", type=str,
                         help="Glob string")
     parser.add_argument("fs", type=int, default=10,
@@ -43,5 +44,6 @@ if __name__ == '__main__':
                         help="Ignore velocity")
 
     args = parser.parse_args()
+    print(args)
     convert(args.globstr, args.fs, args.program, args.threshold, args.samples,
             args.boolean)
