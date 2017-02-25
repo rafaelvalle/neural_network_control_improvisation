@@ -79,8 +79,8 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=2e-3,
     labels = encode_labels(labels, one_hot=True).astype(np.float32)
     if boolean:
         inputs += inputs.min()
-        inputs = inputs.astype(bool)
         inputs /= inputs.max()
+        inputs = inputs.astype(bool)
         # project to [-1, 1]
         inputs = lasagne.utils.floatX((inputs * 2) - 1)
 
@@ -88,12 +88,12 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=2e-3,
     epochsize = len(inputs) / batchsize
 
     # create fixed conditions and noise for output evaluation
-    N_PER_CONDITION = 2
-    N_SAMPLES_GEN = labels.shape[1]
-    FIXED_CONDITION = lasagne.utils.floatX(np.eye(N_SAMPLES_GEN)[
-        np.repeat(np.arange(N_SAMPLES_GEN), N_PER_CONDITION)])
-    FIXED_NOISE = lasagne.utils.floatX(
-        np.random.rand(N_SAMPLES_GEN*N_PER_CONDITION, NOISE_SIZE))
+    N_LABELS = labels.shape[1]
+    N_SAMPLES = 12 * 12
+    FIXED_CONDITION = lasagne.utils.floatX(np.eye(N_LABELS)[
+        np.repeat(np.arange(N_LABELS), 1+(N_SAMPLES / N_LABELS))])
+    FIXED_CONDITION = FIXED_CONDITION[:N_SAMPLES]
+    FIXED_NOISE = lasagne.utils.floatX(np.random.rand(N_SAMPLES, NOISE_SIZE))
 
     # Prepare Theano variables for inputs
     noise_var = T.fmatrix('noise')
@@ -171,9 +171,9 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=2e-3,
         generator_scores = []
         for _ in tqdm(range(epochsize)):
             if (generator_updates < 25) or (generator_updates % 500 == 0):
-                crepe_critic_runs = 100
+                crepe_critic_runs = 100 # 10
             else:
-                crepe_critic_runs = 20 #5
+                crepe_critic_runs = 5  # 20
             for _ in range(crepe_critic_runs):
                 batch_in, batch_cond = next(batches)
                 # reshape batch to proper dimensions
@@ -195,17 +195,17 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=2e-3,
         axes[1].set_title('Loss(G)')
         axes[1].plot(epoch_generator_scores)
         fig.tight_layout()
-        fig.savefig('images/wccrepe_gan_proll/g_updates{}'.format(epoch))
+        fig.savefig('images/wcgan_proll/g_updates{}'.format(epoch))
         plt.close('all')
 
         # plot and create midi from generated data
         samples = gen_fn(FIXED_NOISE, FIXED_CONDITION)
         plt.imsave('images/wcgan_proll/wcgan_gits{}.png'.format(epoch),
-                   (samples.reshape(N_PER_CONDITION, N_SAMPLES_GEN, 128, 128)
+                   (samples.reshape(12, 12, 128, 128)
                            .transpose(0, 2, 1, 3)
-                           .reshape(N_PER_CONDITION*128, N_SAMPLES_GEN*128)).T,
+                           .reshape(12*128, 12*128)).T,
                    origin='bottom',
-                   cmap='gray')
+                   cmap='jet')
         np.save(
             'midi/wcgan_proll/wcgan_gits{}.npy'.format(epoch), samples)
 
@@ -213,10 +213,11 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=2e-3,
         if epoch >= num_epochs // 2:
             progress = float(epoch) / num_epochs
             eta.set_value(lasagne.utils.floatX(initial_eta*2*(1 - progress)))
-
-    # Optionally, you could now dump the network weights to a file like this:
-    # np.savez('wcgan_proll_gen.npz', *lasagne.layers.get_all_param_values(generator))
-    # np.savez('wcgan_proll_crit.npz', *lasagne.layers.get_all_param_values(crepe_critic))
+        if (epoch+1 % 50) == 0:
+            np.savez('wcgan_proll_gen_{}.npz'.format(epoch),
+                     *lasagne.layers.get_all_param_values(generator))
+            np.savez('wcgan_proll_crit_{}.npz'.format(epoch),
+                     *lasagne.layers.get_all_param_values(crepe_critic))
     #
     # And load them again later on like this:
     # with np.load('model.npz') as f:
