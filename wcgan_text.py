@@ -60,12 +60,10 @@ def iterate_minibatches(inputs, labels, batchsize, shuffle=True, forever=True,
                     # zero pad data
                     z = np.zeros((length, alphabet_size))
                     z[:len(cur_data)] = cur_data
-                    data.append(z)
-                elif len(cur_data) == length:
-                    data.append(cur_data)
-                else:
+                    cur_data = z
+                elif len(cur_data) > length:
                     # slice data
-                    rand_start = np.random.randint(0, len(inputs[i]) - length)
+                    rand_start = np.random.randint(0, len(cur_data) - length)
                     cur_data = cur_data[rand_start:rand_start+length]
 
                 data.append(cur_data)
