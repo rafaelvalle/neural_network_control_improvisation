@@ -1,5 +1,5 @@
-""" critic, discriminator and generator models found in the literature and
-invented
+""" critic, discriminator and generator models from the adversarial literature
+and from ganlucinations
 """
 
 
@@ -8,15 +8,10 @@ def tanh_temperature(x, temperature=1):
     return tanh(x * temperature)
 
 
-def build_generator(input_var, cond_var, n_conds, noise_size, arch=0):
-    from lasagne.layers import InputLayer, ReshapeLayer, DenseLayer, ConcatLayer
+def build_generator(input_var, noise_size, cond_var=None, n_conds=0, arch=0):
+    from lasagne.layers import InputLayer, ReshapeLayer, DenseLayer, concat
     from lasagne.layers import Upscale2DLayer, Conv2DLayer
-    try:
-        from lasagne.layers import TransposedConv2DLayer as Deconv2DLayer
-    except ImportError:
-        raise ImportError("Your Lasagne is too old. Try the bleeding-edge "
-                          "version: http://lasagne.readthedocs.io/en/latest/"
-                          "user/installation.html#bleeding-edge-version")
+    from lasagne.layers import TransposedConv2DLayer as Deconv2DLayer
     try:
         from lasagne.layers.dnn import batch_norm_dnn as batch_norm
     except ImportError:
@@ -24,9 +19,10 @@ def build_generator(input_var, cond_var, n_conds, noise_size, arch=0):
     from lasagne.nonlinearities import LeakyRectify
     lrelu = LeakyRectify(0.01)
 
-    layer_in = InputLayer(shape=(None, noise_size), input_var=input_var)
-    cond_in = InputLayer(shape=(None, n_conds), input_var=cond_var)
-    layer = ConcatLayer([layer_in, cond_in])
+    layer = InputLayer(shape=(None, noise_size), input_var=input_var)
+    if cond_var is not None:
+        cond_in = InputLayer(shape=(None, n_conds), input_var=cond_var)
+        layer = concat([layer, cond_in])
     if arch == 0:
         # DCGAN
         layer = batch_norm(DenseLayer(layer, 1024*4*4, nonlinearity=lrelu))
@@ -137,7 +133,7 @@ def build_generator(input_var, cond_var, n_conds, noise_size, arch=0):
 
 
 def build_generator_lstm(params, gate_params, cell_params, arch=1):
-    from lasagne.layers import InputLayer, DenseLayer, ConcatLayer
+    from lasagne.layers import InputLayer, DenseLayer, concat
     from lasagne.layers import DropoutLayer
     from lasagne.layers.recurrent import LSTMLayer
     from lasagne.init import Constant, HeNormal
@@ -188,7 +184,7 @@ def build_generator_lstm(params, gate_params, cell_params, arch=1):
             nonlinearity=params['non_linearities'][1])
 
         # concatenate output of forward and backward layers
-        l_lstm_concat = ConcatLayer(
+        l_lstm_concat = concat(
             [l_forward_data, l_forward_noise, l_backward_data,
              l_backward_noise], axis=2)
 
@@ -203,7 +199,7 @@ def build_generator_lstm(params, gate_params, cell_params, arch=1):
         # l_lstm_dense = lasagne.layer.batch_norm(l_lstm_dense)
 
         # concatenate dense layer of lstsm with condition
-        l_lstm_cond_concat = ConcatLayer(
+        l_lstm_cond_concat = concat(
             [l_lstm_dense, l_cond], axis=2)
 
         # dense layer with dense layer lstm and condition, w/dropout
@@ -230,7 +226,7 @@ def build_generator_lstm(params, gate_params, cell_params, arch=1):
 
 
 def build_discriminator_lstm(params, gate_params, cell_params):
-    from lasagne.layers import InputLayer, DenseLayer, ConcatLayer
+    from lasagne.layers import InputLayer, DenseLayer, concat
     from lasagne.layers.recurrent import LSTMLayer
     from lasagne.regularization import l2, regularize_layer_params
     # from layers import MinibatchLayer
@@ -255,7 +251,7 @@ def build_discriminator_lstm(params, gate_params, cell_params):
         mask_input=l_mask, backwards=True)
 
     # concatenate output of forward and backward layers
-    l_concat = ConcatLayer([l_forward, l_backward], axis=1)
+    l_concat = concat([l_forward, l_backward], axis=1)
 
     # minibatch layer on forward and backward layers
     # l_minibatch = MinibatchLayer(l_concat, num_kernels=100)
@@ -278,16 +274,23 @@ def build_discriminator_lstm(params, gate_params, cell_params):
     return Discriminator(l_in, l_mask, l_out)
 
 
-def build_critic(input_var=None, arch=0):
-    from lasagne.layers import (InputLayer, Conv2DLayer, DenseLayer,
-                                MaxPool2DLayer, dropout, flatten)
+def build_critic(input_var=None, cond_var=None, n_conds=0, arch=0):
+    from lasagne.layers import (
+        InputLayer, Conv2DLayer, DenseLayer, MaxPool2DLayer, concat,
+        dropout, flatten)
     try:
         from lasagne.layers.dnn import batch_norm_dnn as batch_norm
     except ImportError:
         from lasagne.layers import batch_norm
     from lasagne.nonlinearities import rectify, LeakyRectify
     lrelu = LeakyRectify(0.2)
-    layer = InputLayer(shape=(None, 1, 128, 128), input_var=input_var)
+    layer = InputLayer(shape=(None, 1, 128, 128), input_var=input_var,
+                       name='d_in_data')
+    if cond_var:
+        # class: from data or from generator input
+        layer_cond = InputLayer(shape=(None, n_conds), input_var=cond_var,
+                       name='d_in_condition')
+        layer_cond = batch_norm(DenseLayer(layer_cond, 1024, nonlinearity=lrelu))
     if arch == 0:
         # DCGAN inspired
         layer = batch_norm(Conv2DLayer(
@@ -331,6 +334,8 @@ def build_critic(input_var=None, arch=0):
     else:
         raise Exception("Model architecture {} is not supported".format(arch))
         # output layer (linear and without bias)
+    if cond_var is not None:
+        layer = concat([layer, layer_cond])
     layer = DenseLayer(layer, 1, nonlinearity=None, b=None)
     print("Critic output:", layer.output_shape)
     return layer
