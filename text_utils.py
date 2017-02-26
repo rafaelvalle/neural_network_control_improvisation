@@ -1,6 +1,6 @@
 import re
 import numpy as np
-from nltk.corpus import stopwords
+import pdb
 
 
 def removeHtml(html):
@@ -33,10 +33,22 @@ def removeStopwords(l_words, lang='english'):
     return content
 
 
-def binarizeText(text, remove_stopwords=False, remove_html=True):
+def binarizeText(text, lower_case=True, remove_stopwords=False,
+                 remove_html=True):
+    from bs4 import BeautifulSoup
+    from nltk.corpus import stopwords
     if remove_html:
-        text = removeHtml(text)
+        try:
+            text = BeautifulSoup(text, 'lxml').get_text()
+        except:
+            pdb.set_trace()
+    if lower_case:
+        preprocess = lambda x: x.lower()
+    else:
+        preprocess = lambda x: x
+
     if remove_stopwords:
         text = removeStopwords(text.split(' '))
-    text = np.array([ord(c) if ord(c) < 126 else 127 for c in text], dtype=int)
+    text = np.array([ord(preprocess(c)) if ord(preprocess(c)) < 126 else 127
+                    for c in text], dtype=int)
     return np.eye(128, dtype=int)[text]
