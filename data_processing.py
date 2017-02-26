@@ -23,7 +23,7 @@ def encode_labels(labels, one_hot=False):
     return labels_enc
 
 
-def load_text_data(datapath, data_col, label_col, n_pieces, as_dict=True,
+def load_text_data(datapaths, data_col, label_col, n_pieces, as_dict=True,
                    patch_size=False, sep=','):
 
     data = defaultdict(list)
@@ -31,29 +31,31 @@ def load_text_data(datapath, data_col, label_col, n_pieces, as_dict=True,
         data = []
         labels = []
 
-    dataset = pd.read_csv(datapath, sep=sep).as_matrix()
-    if n_pieces:
-        dataset = dataset[
-            np.random.choice(np.arange(len(data)), n_pieces, replace=False)]
-
-    for i in range(len(dataset)):
-        cur_data = dataset[i, data_col]
-        cur_lbl = dataset[i, label_col]
-        if patch_size:
-            ids = np.arange(0, len(cur_data) - patch_size, patch_size)
-            cur_data = np.array([
-                cur_data[ids[i-1]:ids[i]] for i in range(1, len(ids))])
-        if not as_dict:
+    for i in range(len(datapaths)):
+        dataset = pd.read_csv(datapaths[i], sep=sep).as_matrix()
+        if n_pieces:
+            dataset = dataset[
+                np.random.choice(np.arange(len(data)), n_pieces, replace=False)]
+        for j in range(len(dataset)):
+            cur_data = dataset[j, data_col[i]]
+            cur_lbl = dataset[j, label_col[i]]
             if patch_size:
-                data.extend(cur_data)
-                labels.extend([cur_lbl] * len(cur_data))
+                ids = np.arange(0, len(cur_data) - patch_size, patch_size)
+                cur_data = np.array([
+                    cur_data[ids[k-1]:ids[k]] for k in range(1, len(ids))])
+            if not as_dict:
+                if patch_size:
+                    data.append(cur_data)
+                    labels.extend([cur_lbl] * len(cur_data))
+                else:
+                    data.append(cur_data)
+                    labels.extend(cur_lbl)
             else:
-                data.append(cur_data)
-                labels.extend(cur_lbl)
-        else:
-            data[cur_lbl].append(cur_data)
+                data[cur_lbl].append(cur_data)
     if not as_dict:
         return np.array(data), np.array(labels)
+
+    return data
 
 
 def load_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
