@@ -40,12 +40,16 @@ def load_text_data(datapaths, data_col, label_col, n_pieces, as_dict=True,
             cur_data = dataset[j, data_col[i]]
             cur_lbl = dataset[j, label_col[i]]
             if patch_size:
-                ids = np.arange(0, len(cur_data) - patch_size, patch_size)
-                cur_data = np.array([
-                    cur_data[ids[k-1]:ids[k]] for k in range(1, len(ids))])
+                if len(cur_data) < 2*patch_size:
+                    cur_data = [cur_data[:patch_size]]
+                else:
+                    ids = np.arange(0, len(cur_data) - patch_size, patch_size)
+                    cur_data = [
+                        cur_data[ids[k-1]:ids[k]] for k in range(1, len(ids))]
             if not as_dict:
                 if patch_size:
-                    data.append(cur_data)
+                    for l in range(len(cur_data)):
+                        data.append(cur_data[l])
                     labels.extend([cur_lbl] * len(cur_data))
                 else:
                     data.append(cur_data)
