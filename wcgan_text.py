@@ -33,7 +33,7 @@ from data_processing import load_text_data, encode_labels
 import pdb
 
 NOISE_SIZE = 256
-CRITIC_ARCH = 1
+CRITIC_ARCH = 2
 GENERATOR_ARCH = 1
 
 
@@ -78,12 +78,16 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=2e-3,
          clip=0.01, boolean=False):
     # Load the dataset
     print("Loading data...")
-    datapath = '/media/steampunkhd/rafaelvalle/datasets/TEXT/ag_news_csv/train.csv'
-    data_col, label_col = 2, 0
+    datapaths = (
+        '/media/steampunkhd/rafaelvalle/datasets/TEXT/ag_news_csv/train.csv',
+        '/media/steampunkhd/rafaelvalle/datasets/TEXT/ag_news_csv/test.csv')
+
+    data_cols = (2, 1)
+    label_cols = (0, 0)
     n_pieces = 0  # 0 is equal to all pieces, unbalanced dataset
     as_dict = False
     inputs, labels = load_text_data(
-        datapath, data_col, label_col, n_pieces, as_dict, patch_size=128)
+        datapaths, data_cols, label_cols, n_pieces, as_dict, patch_size=128)
     labels = encode_labels(labels, one_hot=True).astype(np.float32)
 
     print("Dataset shape {}".format(inputs.shape))
@@ -242,14 +246,16 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=2e-3,
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Trains WCGAN on Text data")
+    parser = argparse.ArgumentParser(
+        description="Trains WCGAN on Text data",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("-n", "--n_epochs", type=int, default=100,
                         help="Number of tepochs")
     parser.add_argument("-e", "--epoch_size", type=int, default=100,
                         help="Epoch Size")
     parser.add_argument("-m", "--bs", type=int, default=128,
                         help="Mini-Batch Size")
-    parser.add_argument("-l", "--lr", type=float, default=2e-3,
+    parser.add_argument("-l", "--lr", type=float, default=1e-4,
                         help="Learning Rate")
     parser.add_argument("-c", "--clip", type=float, default=0.01,
                         help="Clip weights")
