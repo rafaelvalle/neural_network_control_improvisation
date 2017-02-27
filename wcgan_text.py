@@ -184,7 +184,7 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=2e-3,
         generator_scores = []
         for _ in tqdm(range(epochsize)):
             if (generator_updates < 25) or (generator_updates % 500 == 0):
-                critic_runs = 100  # 10
+                critic_runs = 200  # 10
             else:
                 critic_runs = 5  # 20
             for _ in range(critic_runs):
