@@ -317,20 +317,20 @@ def build_critic(input_var=None, cond_var=None, n_conds=0, arch=0):
     elif arch == 2:
         # CREPE
         # form words from sequence of characters
-        layer = Conv2DLayer(layer, 1024, (7, 128), nonlinearity=lrelu)
+        layer = batch_norm(Conv2DLayer(layer, 1024, (7, 128), nonlinearity=lrelu))
         layer = MaxPool2DLayer(layer, (3, 1))
         # temporal convolution, 7-gram
-        layer = Conv2DLayer(layer, 512, (7, 1), nonlinearity=lrelu)
+        layer = batch_norm(Conv2DLayer(layer, 512, (7, 1), nonlinearity=lrelu))
         layer = MaxPool2DLayer(layer, (3, 1))
         # temporal convolution, 3-gram
-        layer = Conv2DLayer(layer, 256, (3, 1), nonlinearity=lrelu)
-        layer = Conv2DLayer(layer, 256, (3, 1), nonlinearity=lrelu)
-        layer = Conv2DLayer(layer, 256, (3, 1), nonlinearity=lrelu)
-        layer = Conv2DLayer(layer, 256, (3, 1), nonlinearity=lrelu)
+        layer = batch_norm(Conv2DLayer(layer, 256, (3, 1), nonlinearity=lrelu))
+        layer = batch_norm(Conv2DLayer(layer, 256, (3, 1), nonlinearity=lrelu))
+        layer = batch_norm(Conv2DLayer(layer, 256, (3, 1), nonlinearity=lrelu))
+        layer = batch_norm(Conv2DLayer(layer, 256, (3, 1), nonlinearity=lrelu))
         layer = flatten(layer)
         # fully-connected layers
-        layer = dropout(DenseLayer(layer, 1024, nonlinearity=rectify))
-        layer = dropout(DenseLayer(layer, 1024, nonlinearity=rectify))
+        layer = batch_norm(DenseLayer(layer, 1024, nonlinearity=rectify))
+        layer = batch_norm(DenseLayer(layer, 1024, nonlinearity=rectify))
     else:
         raise Exception("Model architecture {} is not supported".format(arch))
         # output layer (linear and without bias)
