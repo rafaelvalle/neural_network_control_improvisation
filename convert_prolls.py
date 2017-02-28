@@ -14,18 +14,19 @@ def convert(globstr, fs, program, threshold, samples, boolean, argmax):
             proll = prolls[i]
             if len(proll.shape) == 3:
                 proll = proll[0]
-            if argmax:
-                z = np.zeros(proll.shape)
-                z[np.arange(len(proll)), np.argmax(proll, axis=0)] = 1
-                proll = z
-            else:
                 if threshold < proll.max():
                     proll[proll < threshold] = -1
+                if argmax:
+                    z = np.zeros(proll.shape) - 1
+                    max_per_row = np.argmax(proll, axis=1)
+                    z[np.arange(len(proll)), max_per_row] = (
+                        proll[np.arange(len(proll)), max_per_row])
+                    proll = z
                 proll += abs(proll.min())
                 if proll.max() != 0:
                     proll /= proll.max()
-                    if boolean:
-                        proll = (proll > 0).astype(int)
+                if boolean:
+                    proll = (proll > 0).astype(int)
             proll *= 127
             proll = proll.astype(int)
             pianoroll_to_midi(

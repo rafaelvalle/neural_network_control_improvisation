@@ -3,9 +3,6 @@
 
 """
 Example employing Lasagne for piano roll generation
-Crepe
-https://github.com/Azure/Cortana-Intelligence-Gallery-Content/blob/master/Tutorials/Deep-Learning-for-Text-Classification-in-Azure/python/03%20-%20Crepe%20-%20Amazon%20(advc).py
-
 Wasserstein Generative Adversarial Networks
 (WGANs, see https://arxiv.org/abs/1701.07875 for the paper and
 https://github.com/martinarjovsky/WassersteinGAN for the "official" code).
@@ -103,32 +100,39 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=2e-3,
     # Create neural network model
     print("Building model and compiling functions...")
     generator = build_generator(
-        noise_var, cond_var, labels.shape[1], NOISE_SIZE, GENERATOR_ARCH)
-    crepe_critic = build_critic(input_var, CRITIC_ARCH)
+        noise_var, NOISE_SIZE, cond_var, labels.shape[1], GENERATOR_ARCH)
+    critic = build_critic(
+        input_var, cond_var, labels.shape[1], CRITIC_ARCH)
 
-    # Create expression for passing real data through the crepe_critic
-    real_out = lasagne.layers.get_output(crepe_critic)
-    # Create expression for passing fake data through the crepe_critic
+    # Create expression for passing real data through the critic
+    real_out = lasagne.layers.get_output(critic)
+    # Create expression for passing fake data through the critic
+    d_in_layer = [l for l in lasagne.layers.get_all_layers(critic)
+                  if l.name == 'd_in_data'][0]
+    d_cond_layer = [l for l in lasagne.layers.get_all_layers(critic)
+                    if l.name == 'd_in_condition'][0]
     fake_out = lasagne.layers.get_output(
-        crepe_critic, lasagne.layers.get_output(generator))
+        critic,
+        inputs={d_in_layer: lasagne.layers.get_output(generator),
+                d_cond_layer: cond_var})
 
     # Create score expressions to be maximized (i.e., negative losses)
     generator_score = fake_out.mean()
-    crepe_critic_score = real_out.mean() - fake_out.mean()
+    critic_score = real_out.mean() - fake_out.mean()
 
     # Create update expressions for training
     generator_params = lasagne.layers.get_all_params(generator, trainable=True)
-    crepe_critic_params = lasagne.layers.get_all_params(crepe_critic, trainable=True)
+    critic_params = lasagne.layers.get_all_params(critic, trainable=True)
     eta = theano.shared(lasagne.utils.floatX(initial_eta))
     generator_updates = lasagne.updates.rmsprop(
             -generator_score, generator_params, learning_rate=eta)
-    crepe_critic_updates = lasagne.updates.rmsprop(
-            -crepe_critic_score, crepe_critic_params, learning_rate=eta)
+    critic_updates = lasagne.updates.rmsprop(
+            -critic_score, critic_params, learning_rate=eta)
 
-    # Clip crepe_critic parameters in a limited range around zero (except biases)
-    for param in lasagne.layers.get_all_params(crepe_critic, trainable=True,
+    # Clip critic parameters in a limited range around zero (except biases)
+    for param in lasagne.layers.get_all_params(critic, trainable=True,
                                                regularizable=True):
-        crepe_critic_updates[param] = T.clip(crepe_critic_updates[param], -clip, clip)
+        critic_updates[param] = T.clip(critic_updates[param], -clip, clip)
 
     # Instantiate a symbolic noise generator to use for training
     from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
@@ -141,10 +145,10 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=2e-3,
                                          generator_score,
                                          givens={noise_var: noise},
                                          updates=generator_updates)
-    crepe_critic_train_fn = theano.function([input_var, cond_var],
-                                            crepe_critic_score,
-                                            givens={noise_var: noise},
-                                            updates=crepe_critic_updates)
+    critic_train_fn = theano.function([input_var, cond_var],
+                                      critic_score,
+                                      givens={noise_var: noise},
+                                      updates=critic_updates)
 
     # Compile another function generating some data
     gen_fn = theano.function([noise_var, cond_var],
@@ -158,40 +162,40 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=2e-3,
                                   length=0, forever=True)
     # We iterate over epochs:
     generator_updates = 0
-    epoch_crepe_critic_scores = []
+    epoch_critic_scores = []
     epoch_generator_scores = []
     for epoch in range(num_epochs):
         start_time = time.time()
 
         # In each epoch, we do `epochsize` generator updates. Usually, the
-        # crepe_critic is updated 5 times before every generator update. For the
+        # critic is updated 5 times before every generator update. For the
         # first 25 generator updates and every 500 generator updates, the
-        # crepe_critic is updated 100 times instead, following the authors' code.
-        crepe_critic_scores = []
+        # critic is updated 100 times instead, following the authors' code.
+        critic_scores = []
         generator_scores = []
         for _ in tqdm(range(epochsize)):
             if (generator_updates < 25) or (generator_updates % 500 == 0):
-                crepe_critic_runs = 100 # 10
+                critic_runs = 100  # 10
             else:
-                crepe_critic_runs = 5  # 20
-            for _ in range(crepe_critic_runs):
+                critic_runs = 5  # 20
+            for _ in range(critic_runs):
                 batch_in, batch_cond = next(batches)
                 # reshape batch to proper dimensions
                 batch_in = batch_in.reshape(
                     (batch_in.shape[0], 1, batch_in.shape[1], batch_in.shape[2]))
-                crepe_critic_scores.append(crepe_critic_train_fn(batch_in, batch_cond))
+                critic_scores.append(critic_train_fn(batch_in, batch_cond))
             generator_scores.append(generator_train_fn(batch_cond))
             generator_updates += 1
 
         # Then we print the results for this epoch:
         print("Epoch {} of {} took {:.3f}s".format(
             epoch + 1, num_epochs, time.time() - start_time))
-        epoch_crepe_critic_scores.append(np.mean(generator_scores))
-        epoch_generator_scores.append(np.mean(crepe_critic_scores))
+        epoch_critic_scores.append(np.mean(generator_scores))
+        epoch_generator_scores.append(np.mean(critic_scores))
 
         fig, axes = plt.subplots(1, 2, figsize=(8, 2))
         axes[0].set_title('Loss(C)')
-        axes[0].plot(epoch_crepe_critic_scores)
+        axes[0].plot(epoch_critic_scores)
         axes[1].set_title('Loss(G)')
         axes[1].plot(epoch_generator_scores)
         fig.tight_layout()
@@ -213,11 +217,12 @@ def main(num_epochs=100, epochsize=100, batchsize=128, initial_eta=2e-3,
         if epoch >= num_epochs // 2:
             progress = float(epoch) / num_epochs
             eta.set_value(lasagne.utils.floatX(initial_eta*2*(1 - progress)))
-        if (epoch+1 % 50) == 0:
+
+        if (epoch % 49) == 0:
             np.savez('wcgan_proll_gen_{}.npz'.format(epoch),
                      *lasagne.layers.get_all_param_values(generator))
             np.savez('wcgan_proll_crit_{}.npz'.format(epoch),
-                     *lasagne.layers.get_all_param_values(crepe_critic))
+                     *lasagne.layers.get_all_param_values(critic))
     #
     # And load them again later on like this:
     # with np.load('model.npz') as f:
@@ -237,7 +242,7 @@ if __name__ == '__main__':
                         help="Learning Rate")
     parser.add_argument("-c", "--clip", type=float, default=0.01,
                         help="Clip weights")
-    parser.add_argument("-b", "--boolean", type=bool, default=0,
+    parser.add_argument("-b", "--boolean", type=int, default=0,
                         help="Data as boolean")
 
     args = parser.parse_args()
