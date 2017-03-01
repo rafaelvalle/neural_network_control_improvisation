@@ -28,6 +28,7 @@ def removeHtml(html):
 
 
 def removeStopwords(l_words, lang='english'):
+    from nltk.corpus import stopwords
     l_stopwords = stopwords.words(lang)
     content = [w for w in l_words if w.lower() not in l_stopwords]
     return content
@@ -36,7 +37,6 @@ def removeStopwords(l_words, lang='english'):
 def binarizeText(text, lower_case=True, remove_stopwords=False,
                  remove_html=True):
     from bs4 import BeautifulSoup
-    from nltk.corpus import stopwords
     if remove_html:
         try:
             text = BeautifulSoup(text, 'lxml').get_text()
@@ -51,4 +51,4 @@ def binarizeText(text, lower_case=True, remove_stopwords=False,
         text = removeStopwords(text.split(' '))
     text = np.array([ord(preprocess(c)) if ord(preprocess(c)) < 126 else 127
                     for c in text], dtype=int)
-    return np.eye(128, dtype=int)[text]
+    return np.eye(128, dtype=int)[:, text]
