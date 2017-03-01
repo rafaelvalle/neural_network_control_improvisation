@@ -18,9 +18,9 @@ def convert(globstr, fs, program, threshold, samples, boolean, argmax):
                     proll[proll < threshold] = -1
                 if argmax:
                     z = np.zeros(proll.shape) - 1
-                    max_per_row = np.argmax(proll, axis=1)
-                    z[np.arange(len(proll)), max_per_row] = (
-                        proll[np.arange(len(proll)), max_per_row])
+                    max_per_col = np.argmax(proll, axis=0)
+                    z[max_per_col, np.arange(proll.shape[1])] = (
+                        proll[max_per_col, np.arange(proll.shape[1])])
                     proll = z
                 proll += abs(proll.min())
                 if proll.max() != 0:
