@@ -11,42 +11,32 @@ def pianoroll_to_midi(pianoroll, fs, program=1, filepath='midifile.mid'):
         program = pm.instrument_name_to_program(program)
     instrument = pm.Instrument(program=program)
 
-    # cumbersomely slow
-    for note in range(pianoroll.shape[1]):
+    # cumbersomely slow, refactor
+    for note in range(pianoroll.shape[0]):
         start = 0
         end = 0
-        while end < pianoroll.shape[0]:
+        while end < pianoroll.shape[1]:
             # find where note starts
-            while start < pianoroll.shape[0] and pianoroll[start, note] == 0:
+            while start < pianoroll.shape[1] and pianoroll[note, start] == 0:
                 start += 1
             end = start + 1
 
             # nothing left
-            if start == pianoroll.shape[0]:
+            if start == pianoroll.shape[1]:
                 break
 
             # find where note ends
-            while end < pianoroll.shape[0] and pianoroll[end, note] > 0:
+            while end < pianoroll.shape[1] and pianoroll[note, end] > 0:
                 end += 1
 
             # add note to instrument
             instrument.notes.append(pm.Note(
-                velocity=int(pianoroll[start, note]),
+                velocity=int(pianoroll[note, start]),
                 pitch=note,
                 start=start * 1.0/fs,
                 end=end * 1.0/fs))
             start = end
 
-    """
-    for t in range(pianoroll.shape[0]):
-        midi_notes = np.argwhere(pianoroll[t] > 0)
-        for midi_note in midi_notes:
-            instrument.notes.append(pm.Note(
-                velocity=pianoroll[t, midi_note],
-                pitch=midi_note,
-                start=t * 1.0/fs,
-                end=(t+1) * 1.0/fs))
-    """
     midifile.instruments.append(instrument)
     midifile.write(filepath)
 
