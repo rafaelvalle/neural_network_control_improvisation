@@ -7,14 +7,14 @@ import glob2 as glob
 
 def convert(globstr, samples):
     for filepath in glob.glob(globstr):
-        prolls = np.load(filepath)
-        print('{}, {}'.format(filepath, prolls.shape))
+        encoded_texts = np.load(filepath)
+        print('{}, {}'.format(filepath, encoded_texts.shape))
         text = '{}\n'.format(filepath)
-        for i in range(min(samples, len(prolls))):
-            proll = prolls[i]
-            if len(proll.shape) == 3:
-                proll = proll[0]
-            cur_txt = ''.join([chr(x) for x in np.argmax(proll, axis=1)])
+        for i in range(min(samples, len(encoded_texts))):
+            encoded_text = encoded_texts[i]
+            if len(encoded_text.shape) == 3:
+                encoded_text = encoded_text[0]
+            cur_txt = ''.join([chr(x) for x in np.argmax(encoded_text, axis=0)])
             text += '{}, {}\n'.format(i, cur_txt)
         with open(filepath+'.txt', "w") as text_file:
             text_file.write(text)
