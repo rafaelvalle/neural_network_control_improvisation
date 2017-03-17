@@ -34,7 +34,7 @@ def removeStopwords(l_words, lang='english'):
     return content
 
 
-def binarizeText(text, lower_case=True, remove_stopwords=False,
+def binarizeText(text, encoder, lower_case=True, remove_stopwords=False,
                  remove_html=True):
     from bs4 import BeautifulSoup
     if remove_html:
@@ -49,6 +49,26 @@ def binarizeText(text, lower_case=True, remove_stopwords=False,
 
     if remove_stopwords:
         text = removeStopwords(text.split(' '))
-    text = np.array([ord(preprocess(c)) if ord(preprocess(c)) < 126 else 127
-                    for c in text], dtype=int)
-    return np.eye(128, dtype=int)[:, text]
+    text = np.array(encoder.encode(preprocess(text)), dtype=int)
+    return np.eye(len(encoder.alphabet), dtype=int)[:, text]
+
+
+class textEncoder():
+    def __init__(self, alphabet, out='#'):
+        self.alphabet = alphabet
+        self.out = '#'
+        self.encoder = {}
+        self.decoder = {}
+        for i in range(len(alphabet)):
+            self.encoder[alphabet[i]] = i
+            self.decoder[i] = alphabet[i]
+
+    def encode(self, data):
+        return [self.encoder[x]
+                if x in self.encoder else len(self.encoder) + 1
+                for x in data]
+
+    def decode(self, data):
+        return [self.decoder[x]
+                if x in self.decoder else self.out
+                for x in data]
