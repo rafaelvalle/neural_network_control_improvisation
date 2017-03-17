@@ -62,8 +62,8 @@ def load_text_data(datapaths, data_col, label_col, n_pieces, as_dict=True,
     return data
 
 
-def load_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
-              scale=True, patch_size=False):
+def load_proll_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
+                    scale=True, patch_size=False):
 
     data = defaultdict(list)
     if not as_dict:
