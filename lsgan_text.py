@@ -64,7 +64,7 @@ def pad(cur_data, alphabet_size, length, padding):
     return z
 
 
-def iterate_minibatches_text(inputs, labels, batchsize, encoder, shuffle=True,
+def iterate_minibatches_text(inputs, labels, batch_size, encoder, shuffle=True,
                              forever=True, length=128, alphabet_size=128,
                              padding='repeat'):
     from text_utils import binarizeText
@@ -73,11 +73,11 @@ def iterate_minibatches_text(inputs, labels, batchsize, encoder, shuffle=True,
     while True:
         if shuffle:
             np.random.shuffle(indices)
-        for start_idx in range(0, len(inputs) - batchsize + 1, batchsize):
+        for start_idx in range(0, len(inputs) - batch_size + 1, batch_size):
             if shuffle:
-                excerpt = indices[start_idx:start_idx + batchsize]
+                excerpt = indices[start_idx:start_idx + batch_size]
             else:
-                excerpt = slice(start_idx, start_idx + batchsize)
+                excerpt = slice(start_idx, start_idx + batch_size)
 
             data = []
             # select random slice from each piano roll
@@ -107,18 +107,19 @@ def iterate_minibatches_text(inputs, labels, batchsize, encoder, shuffle=True,
 # The models are the same as in the Lasagne DCGAN example, except that the
 # discriminator is now a critic with linear output instead of sigmoid output.
 
-def build_generator(input_var=None):
-    from lasagne.layers import (InputLayer, ReshapeLayer, DenseLayer,
-                                Upscale2DLayer)
+def build_generator(input_var=None, batch_size=None, n_timesteps=128, alphabet_size=128):
+    from lasagne.layers import InputLayer, DenseLayer, LSTMLayer
     from lasagne.layers import TransposedConv2DLayer as Deconv2DLayer
-    from lasagne.layers import LSTMLayer, concat, ExpressionLayer
+    from lasagne.layers import ExpressionLayer, NonlinearityLayer
+    from lasagne.layers import ReshapeLayer, DimshuffleLayer, Upscale2DLayer, concat
     try:
         from lasagne.layers.dnn import batch_norm_dnn as batch_norm
     except ImportError:
         from lasagne.layers import batch_norm
 
     from lasagne.nonlinearities import sigmoid, tanh, softmax
-    layer = InputLayer(shape=(None, 100), input_var=input_var)
+    """
+    layer = InputLayer(shape=(batch_size, 100), input_var=input_var)
     print("MNIST generator")
     layer = batch_norm(DenseLayer(layer, 1024))
     layer = batch_norm(DenseLayer(layer, 1024*8*8))
@@ -133,7 +134,6 @@ def build_generator(input_var=None):
         layer, 1, 5, stride=2, crop='same', output_size=128,
         nonlinearity=tanh))
 
-    """
     # Crepe
     print("Crepe generator")
     layer = batch_norm(DenseLayer(layer, 1024))
@@ -147,10 +147,10 @@ def build_generator(input_var=None):
         layer, 2048, (1, 5), stride=2, crop=0))
     layer = Deconv2DLayer(
         layer, 1, (128, 8), stride=1, crop=0, nonlinearity=tanh)
+    """
     # LSTM
     # input layers
-    layer = InputLayer(shape=(None, None, 100), input_var=input_var)
-    pdb.set_trace()
+    layer = InputLayer(shape=(batch_size, n_timesteps, 100), input_var=input_var)
     # recurrent layers for bidirectional network
     l_forward_noise = LSTMLayer(
         layer, 64, learn_init=True, grad_clipping=None, only_return_final=False)
@@ -158,12 +158,15 @@ def build_generator(input_var=None):
         layer, 64, learn_init=True, grad_clipping=None, only_return_final=False,
         backwards=True)
     layer = concat(
-            [l_forward_noise, l_backward_noise], axis=2)
-    layer = DenseLayer(
-        layer, num_units=128, num_leading_axes=2, nonlinearity=softmax)
-    # layer = ExpressionLayer(layer, lambda X: X*2 - 1)
-    layer = ReshapeLayer(layer, [[0], 1, 128, 128])
-    """
+        [l_forward_noise, l_backward_noise], axis=2)
+    pdb.set_trace()
+    layer = DenseLayer(layer, 1024, num_leading_axes=2)
+    layer = DenseLayer(layer, alphabet_size, num_leading_axes=2)
+    layer = ReshapeLayer(layer, (batch_size*n_timesteps, -1))
+    layer = NonlinearityLayer(layer, softmax)
+    layer = ReshapeLayer(layer, (batch_size, n_timesteps, -1))
+    layer = DimshuffleLayer(layer, (0, 'x', 2, 1))
+    layer = ExpressionLayer(layer, lambda X: X*2 - 1)
 
     print("Generator output:", layer.output_shape)
     return layer
@@ -180,7 +183,7 @@ def build_critic(input_var=None):
     lrelu = LeakyRectify(0.2)
     layer = InputLayer(
         shape=(None, 1, 128, 128), input_var=input_var, name='d_in_data')
-    """
+
     print("MNIST critic")
     # convolution layers
     layer = batch_norm(Conv2DLayer(
@@ -212,6 +215,7 @@ def build_critic(input_var=None):
     # fully-connected layers
     layer = DenseLayer(layer, 1024, nonlinearity=rectify)
     layer = DenseLayer(layer, 1024, nonlinearity=rectify)
+    """
     layer = DenseLayer(layer, 1, nonlinearity=lrelu)
     print("critic output:", layer.output_shape)
     return layer
@@ -226,7 +230,7 @@ def build_critic(input_var=None):
 # them to GPU at once for slightly improved performance. This would involve
 # several changes in the main program, though, and is not demonstrated here.
 
-def iterate_minibatches(inputs, targets, batchsize, shuffle=False,
+def iterate_minibatches(inputs, targets, batch_size, shuffle=False,
                         forever=False):
     assert len(inputs) == len(targets)
     if shuffle:
@@ -234,11 +238,11 @@ def iterate_minibatches(inputs, targets, batchsize, shuffle=False,
     while True:
         if shuffle:
             np.random.shuffle(indices)
-        for start_idx in range(0, len(inputs) - batchsize + 1, batchsize):
+        for start_idx in range(0, len(inputs) - batch_size + 1, batch_size):
             if shuffle:
-                excerpt = indices[start_idx:start_idx + batchsize]
+                excerpt = indices[start_idx:start_idx + batch_size]
             else:
-                excerpt = slice(start_idx, start_idx + batchsize)
+                excerpt = slice(start_idx, start_idx + batch_size)
             yield inputs[excerpt], targets[excerpt]
         if not forever:
             break
@@ -249,22 +253,22 @@ def iterate_minibatches(inputs, targets, batchsize, shuffle=False,
 # more functions to better separate the code, but it wouldn't make it any
 # easier to read.
 
-def main(num_epochs=100, epochsize=100, batchsize=32, initial_deta=1e-4,
+def main(num_epochs=100, epochsize=100, batch_size=32, initial_deta=1e-4,
          initial_geta=1e-2):
     # Load the data according to datatype
     datapaths = (
-        '/media/steampunkhd/rafaelvalle/datasets/TEXT/ag_news_csv/train.csv', )
+        '/Users/rafaelvalle/Desktop/datasets/TEXT/ag_news_csv/train.csv', )
         #'/media/steampunkhd/rafaelvalle/datasets/TEXT/ag_news_csv/test.csv')
 
     data_cols = (2, 1)
     label_cols = (0, 0)
     n_pieces = 0  # 0 is equal to all pieces, unbalanced dataset
     as_dict = False
-    patch_size = 128
+    n_timesteps = 128
     padding = 'repeat'
     inputs, labels = load_text_data(
         datapaths, data_cols, label_cols, n_pieces, as_dict,
-        patch_size=patch_size)
+        patch_size=n_timesteps)
 
     data_size = 5000
     inputs = inputs[:data_size]
@@ -273,23 +277,22 @@ def main(num_epochs=100, epochsize=100, batchsize=32, initial_deta=1e-4,
     # alphabet = list("abcdefghijklmnopqrstuvwxyz0123456789-,;.!?:'\"/\\|_@#$%^&*~`+ =<>()[]{}")
     alphabet = [chr(x) for x in range(128)]
     encoder = textEncoder(alphabet)
+    alphabet_size = len(encoder.alphabet)
     pkl.dump(encoder, open("encdec.pkl", "wb"))
 
     # encode labels
     labels = encode_labels(labels, one_hot=True).astype(np.float32)
     print("Dataset shape {}".format(inputs.shape))
 
-    # create fixed conditions and noise for output evaluation
-    n_samples = 12 * 12
-
     # Prepare Theano variables for inputs and targets
-    noise_var = T.fmatrix('noise')
-    # noise_var = T.ftensor3('noise')
+    # noise_var = T.fmatrix('noise')
+    noise_var = T.ftensor3('noise')
     input_var = T.tensor4('inputs')
+
 
     # Create neural network model
     print("Building model and compiling functions...")
-    generator = build_generator(noise_var)
+    generator = build_generator(noise_var, batch_size, n_timesteps, alphabet_size)
     critic = build_critic(input_var)
     print("Generator #params {}".format(
         lasagne.layers.count_params(generator)))
@@ -322,16 +325,15 @@ def main(num_epochs=100, epochsize=100, batchsize=32, initial_deta=1e-4,
     # Instantiate a symbolic noise generator to use for training
     from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
     srng = RandomStreams(seed=np.random.randint(2147462579, size=6))
-    noise = srng.normal((batchsize, 100))
-    # noise = srng.uniform((batchsize, 128, 100))
+    # noise = srng.normal((batch_size, 100))
+    noise = srng.uniform((batch_size, 128, 100))
 
     # Compile functions performing a training step on a mini-batch (according
     # to the updates dictionary) and returning the corresponding score:
     generator_train_fn = theano.function([], generator_loss,
                                          givens={noise_var: noise},
                                          updates=generator_updates)
-    critic_train_fn = theano.function([input_var],
-                                      critic_loss,
+    critic_train_fn = theano.function([input_var], critic_loss,
                                       givens={noise_var: noise},
                                       updates=critic_updates)
 
@@ -344,16 +346,15 @@ def main(num_epochs=100, epochsize=100, batchsize=32, initial_deta=1e-4,
     # grads = theano.grad(generator_loss, generator_params)
     # gen_grad_fn = theano.function([noise_var], grads)
 
-
     # We create an infinite supply of batches (as an iterable generator):
     print("Loading data...")
     batches = iterator(
-        inputs, labels, batchsize, encoder, shuffle=True, length=patch_size,
+        inputs, labels, batch_size, encoder, shuffle=True, length=n_timesteps,
         forever=True, alphabet_size=len(encoder.alphabet), padding=padding)
 
     # create fixed-noise
-    fixed_noise = lasagne.utils.floatX(np.random.rand(42, 128, 100))
-    fixed_noise = lasagne.utils.floatX(np.random.rand(42, 100))
+    fixed_noise = lasagne.utils.floatX(np.random.rand(32, 128, 100))
+    # fixed_noise = lasagne.utils.floatX(np.random.rand(32, 100))
 
     # We iterate over epochs:
     generator_updates = 0
@@ -384,9 +385,9 @@ def main(num_epochs=100, epochsize=100, batchsize=32, initial_deta=1e-4,
         samples = gen_fn(fixed_noise)
 
         plt.imsave('images/lsgan_text/lsgan_sample_{}.png'.format(epoch),
-                   (samples.reshape(6, 7, len(encoder.alphabet), patch_size)
+                   (samples.reshape(4, 8, len(encoder.alphabet), n_timesteps)
                            .transpose(0, 2, 1, 3)
-                           .reshape(6*len(encoder.alphabet), 7*patch_size)),
+                           .reshape(4*len(encoder.alphabet), 8*n_timesteps)),
                    origin='bottom',
                    cmap='gray')
 
