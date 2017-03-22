@@ -108,83 +108,112 @@ def iterate_minibatches_text(inputs, labels, batchsize, encoder, shuffle=True,
 # discriminator is now a critic with linear output instead of sigmoid output.
 
 def build_generator(input_var=None):
-    from lasagne.layers import InputLayer, ReshapeLayer, DenseLayer
-    try:
-        from lasagne.layers import TransposedConv2DLayer as Deconv2DLayer
-    except ImportError:
-        raise ImportError("Your Lasagne is too old. Try the bleeding-edge "
-                          "version: http://lasagne.readthedocs.io/en/latest/"
-                          "user/installation.html#bleeding-edge-version")
+    from lasagne.layers import (InputLayer, ReshapeLayer, DenseLayer,
+                                Upscale2DLayer)
+    from lasagne.layers import TransposedConv2DLayer as Deconv2DLayer
+    from lasagne.layers import LSTMLayer, concat, ExpressionLayer
     try:
         from lasagne.layers.dnn import batch_norm_dnn as batch_norm
     except ImportError:
         from lasagne.layers import batch_norm
-    from lasagne.nonlinearities import sigmoid, tanh
-    """
-    # input: 100dim
+
+    from lasagne.nonlinearities import sigmoid, tanh, softmax
     layer = InputLayer(shape=(None, 100), input_var=input_var)
-    # fully-connected layer
+    print("MNIST generator")
     layer = batch_norm(DenseLayer(layer, 1024))
-    # project and reshape
-    layer = batch_norm(DenseLayer(layer, 128*7*7))
-    layer = ReshapeLayer(layer, ([0], 128, 7, 7))
-    # two fractional-stride convolutions
-    layer = batch_norm(Deconv2DLayer(layer, 64, 5, stride=2, crop='same',
-                                     output_size=14))
-    layer = Deconv2DLayer(layer, 1, 5, stride=2, crop='same', output_size=28,
-                          nonlinearity=sigmoid)
-    """
-    # fully-connected layers
-    layer = InputLayer(shape=(None, 100), input_var=input_var)
-    layer = batch_norm(DenseLayer(layer, 1024))
-    layer = batch_norm(DenseLayer(layer, 1024))
-    # project and reshape
-    layer = batch_norm(DenseLayer(layer, 128*34*34))
-    layer = ReshapeLayer(layer, ([0], 128, 34, 34))
-    # two fractional-stride convolutions
+    layer = batch_norm(DenseLayer(layer, 1024*8*8))
+    layer = ReshapeLayer(layer, ([0], 1024, 8, 8))
     layer = batch_norm(Deconv2DLayer(
-        layer, 256, 5, stride=2, crop='same'))
+        layer, 128, 5, stride=2, crop='same', output_size=16))
+    layer = batch_norm(Deconv2DLayer(
+        layer, 128, 5, stride=2, crop='same', output_size=32))
+    layer = batch_norm(Deconv2DLayer(
+        layer, 128, 5, stride=2, crop='same', output_size=64))
+    layer = batch_norm(Deconv2DLayer(
+        layer, 1, 5, stride=2, crop='same', output_size=128,
+        nonlinearity=tanh))
+
+    """
+    # Crepe
+    print("Crepe generator")
+    layer = batch_norm(DenseLayer(layer, 1024))
+    layer = batch_norm(DenseLayer(layer, 1024*13))
+    layer = ReshapeLayer(layer, ([0], 1024, 1, 13))
+    layer = batch_norm(Deconv2DLayer(
+        layer, 512, (1, 4), stride=2, crop=0))
+    layer = batch_norm(Deconv2DLayer(
+        layer, 1024, (1, 5), stride=2, crop=0))
+    layer = batch_norm(Deconv2DLayer(
+        layer, 2048, (1, 5), stride=2, crop=0))
     layer = Deconv2DLayer(
-        layer, 1, 6, stride=2, crop='full',
-        nonlinearity=sigmoid)
-    print ("Generator output:", layer.output_shape)
+        layer, 1, (128, 8), stride=1, crop=0, nonlinearity=tanh)
+    # LSTM
+    # input layers
+    layer = InputLayer(shape=(None, None, 100), input_var=input_var)
+    pdb.set_trace()
+    # recurrent layers for bidirectional network
+    l_forward_noise = LSTMLayer(
+        layer, 64, learn_init=True, grad_clipping=None, only_return_final=False)
+    l_backward_noise = LSTMLayer(
+        layer, 64, learn_init=True, grad_clipping=None, only_return_final=False,
+        backwards=True)
+    layer = concat(
+            [l_forward_noise, l_backward_noise], axis=2)
+    layer = DenseLayer(
+        layer, num_units=128, num_leading_axes=2, nonlinearity=softmax)
+    # layer = ExpressionLayer(layer, lambda X: X*2 - 1)
+    layer = ReshapeLayer(layer, [[0], 1, 128, 128])
+    """
+
+    print("Generator output:", layer.output_shape)
     return layer
+
 
 def build_critic(input_var=None):
     from lasagne.layers import (InputLayer, Conv2DLayer, ReshapeLayer,
-                                DenseLayer)
+                                DenseLayer, MaxPool2DLayer, dropout)
     try:
         from lasagne.layers.dnn import batch_norm_dnn as batch_norm
     except ImportError:
         from lasagne.layers import batch_norm
-    from lasagne.nonlinearities import LeakyRectify
+    from lasagne.nonlinearities import LeakyRectify, rectify
     lrelu = LeakyRectify(0.2)
-    """
-    # input: (None, 1, 28, 28)
-    layer = InputLayer(shape=(None, 1, 28, 28), input_var=input_var)
-    # two convolutions
-    layer = batch_norm(Conv2DLayer(layer, 64, 5, stride=2, pad='same',
-                                   nonlinearity=lrelu))
-    layer = batch_norm(Conv2DLayer(layer, 128, 5, stride=2, pad='same',
-                                   nonlinearity=lrelu))
-    # fully-connected layer
-    layer = batch_norm(DenseLayer(layer, 1024, nonlinearity=lrelu))
-    # output layer (linear)
-    """
     layer = InputLayer(
         shape=(None, 1, 128, 128), input_var=input_var, name='d_in_data')
-    # two convolutions
+    """
+    print("MNIST critic")
+    # convolution layers
     layer = batch_norm(Conv2DLayer(
-        layer, 64, 5, stride=2, pad='same',
-        nonlinearity=lrelu))
+        layer, 128, 5, stride=2, pad='same', nonlinearity=lrelu))
     layer = batch_norm(Conv2DLayer(
-        layer, 128, 5, stride=2, pad='same',
-        nonlinearity=lrelu))
-    # fully-connected layer
-    layer = batch_norm(DenseLayer(
-        layer, 1024, nonlinearity=lrelu))
+        layer, 128, 5, stride=2, pad='same', nonlinearity=lrelu))
+    layer = batch_norm(Conv2DLayer(
+        layer, 128, 5, stride=2, pad='same', nonlinearity=lrelu))
+    """
+    print("naive CREPE critic")
+    # words from sequences with 7 characters
+    # each filter learns a word representation of shape M x 1
+    layer = Conv2DLayer(
+        layer, 128, (128, 7), nonlinearity=lrelu)
+    layer = MaxPool2DLayer(layer, (1, 3))
+    # temporal convolution, 7-gram
+    layer = Conv2DLayer(
+        layer, 128, (1, 7), nonlinearity=lrelu)
+    layer = MaxPool2DLayer(layer, (1, 3))
+    # temporal convolution, 3-gram
+    layer = Conv2DLayer(
+        layer, 128, (1, 3), nonlinearity=lrelu)
+    layer = Conv2DLayer(
+        layer, 128, (1, 3), nonlinearity=lrelu)
+    layer = Conv2DLayer(
+        layer, 128, (1, 3), nonlinearity=lrelu)
+    layer = Conv2DLayer(
+        layer, 128, (1, 3), nonlinearity=lrelu)
+    # fully-connected layers
+    layer = DenseLayer(layer, 1024, nonlinearity=rectify)
+    layer = DenseLayer(layer, 1024, nonlinearity=rectify)
     layer = DenseLayer(layer, 1, nonlinearity=lrelu)
-    print ("critic output:", layer.output_shape)
+    print("critic output:", layer.output_shape)
     return layer
 
 
@@ -220,10 +249,11 @@ def iterate_minibatches(inputs, targets, batchsize, shuffle=False,
 # more functions to better separate the code, but it wouldn't make it any
 # easier to read.
 
-def main(num_epochs=1000, epochsize=100, batchsize=32, initial_eta=1e-4):
+def main(num_epochs=100, epochsize=100, batchsize=32, initial_deta=1e-4,
+         initial_geta=1e-2):
     # Load the data according to datatype
     datapaths = (
-        '/Users/rafaelvalle/Desktop/datasets/TEXT/ag_news_csv/train.csv', )
+        '/media/steampunkhd/rafaelvalle/datasets/TEXT/ag_news_csv/train.csv', )
         #'/media/steampunkhd/rafaelvalle/datasets/TEXT/ag_news_csv/test.csv')
 
     data_cols = (2, 1)
@@ -251,23 +281,26 @@ def main(num_epochs=1000, epochsize=100, batchsize=32, initial_eta=1e-4):
 
     # create fixed conditions and noise for output evaluation
     n_samples = 12 * 12
-    fixed_noise = lasagne.utils.floatX(np.random.rand(n_samples, 100))
-
 
     # Prepare Theano variables for inputs and targets
-    noise_var = T.matrix('noise')
+    noise_var = T.fmatrix('noise')
+    # noise_var = T.ftensor3('noise')
     input_var = T.tensor4('inputs')
 
     # Create neural network model
     print("Building model and compiling functions...")
     generator = build_generator(noise_var)
     critic = build_critic(input_var)
+    print("Generator #params {}".format(
+        lasagne.layers.count_params(generator)))
+    print("Critic #params {}".format(
+        lasagne.layers.count_params(critic)))
 
     # Create expression for passing real data through the critic
     real_out = lasagne.layers.get_output(critic)
     # Create expression for passing fake data through the critic
-    fake_out = lasagne.layers.get_output(critic,
-            lasagne.layers.get_output(generator))
+    fake_out = lasagne.layers.get_output(
+        critic, lasagne.layers.get_output(generator))
 
     # Create loss expressions to be minimized
     # a, b, c = -1, 1, 0  # Equation (8) in the paper
@@ -279,23 +312,26 @@ def main(num_epochs=1000, epochsize=100, batchsize=32, initial_eta=1e-4):
     # Create update expressions for training
     generator_params = lasagne.layers.get_all_params(generator, trainable=True)
     critic_params = lasagne.layers.get_all_params(critic, trainable=True)
-    eta = theano.shared(lasagne.utils.floatX(initial_eta))
+    deta = theano.shared(lasagne.utils.floatX(initial_deta))
+    geta = theano.shared(lasagne.utils.floatX(initial_geta))
     generator_updates = lasagne.updates.rmsprop(
-            generator_loss, generator_params, learning_rate=eta)
+            generator_loss, generator_params, learning_rate=geta)
     critic_updates = lasagne.updates.rmsprop(
-            critic_loss, critic_params, learning_rate=eta)
+            critic_loss, critic_params, learning_rate=deta)
 
     # Instantiate a symbolic noise generator to use for training
     from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
     srng = RandomStreams(seed=np.random.randint(2147462579, size=6))
-    noise = srng.uniform((batchsize, 100))
+    noise = srng.normal((batchsize, 100))
+    # noise = srng.uniform((batchsize, 128, 100))
 
     # Compile functions performing a training step on a mini-batch (according
     # to the updates dictionary) and returning the corresponding score:
     generator_train_fn = theano.function([], generator_loss,
                                          givens={noise_var: noise},
                                          updates=generator_updates)
-    critic_train_fn = theano.function([input_var], critic_loss,
+    critic_train_fn = theano.function([input_var],
+                                      critic_loss,
                                       givens={noise_var: noise},
                                       updates=critic_updates)
 
@@ -304,13 +340,25 @@ def main(num_epochs=1000, epochsize=100, batchsize=32, initial_eta=1e-4):
                              lasagne.layers.get_output(generator,
                                                        deterministic=True))
 
+    # compile function for computing gradients
+    # grads = theano.grad(generator_loss, generator_params)
+    # gen_grad_fn = theano.function([noise_var], grads)
+
+
     # We create an infinite supply of batches (as an iterable generator):
     print("Loading data...")
     batches = iterator(
         inputs, labels, batchsize, encoder, shuffle=True, length=patch_size,
         forever=True, alphabet_size=len(encoder.alphabet), padding=padding)
+
+    # create fixed-noise
+    fixed_noise = lasagne.utils.floatX(np.random.rand(42, 128, 100))
+    fixed_noise = lasagne.utils.floatX(np.random.rand(42, 100))
+
     # We iterate over epochs:
     generator_updates = 0
+    epoch_critic_losses = []
+    epoch_generator_losses = []
     # Finally, launch the training loop.
     print("Starting training...")
     for epoch in range(num_epochs):
@@ -326,7 +374,6 @@ def main(num_epochs=1000, epochsize=100, batchsize=32, initial_eta=1e-4):
                 inputs.shape[0], 1, inputs.shape[1], inputs.shape[2])
             critic_losses.append(critic_train_fn(inputs))
             generator_losses.append(generator_train_fn())
-
         # Then we print the results for this epoch:
         print("Epoch {} of {} took {:.3f}s".format(
             epoch + 1, num_epochs, time.time() - start_time))
@@ -334,25 +381,31 @@ def main(num_epochs=1000, epochsize=100, batchsize=32, initial_eta=1e-4):
         print("  critic loss:    {}".format(np.mean(critic_losses)))
 
         # And finally, we plot some generated data
-        samples = gen_fn(lasagne.utils.floatX(np.random.rand(42, 100)))
+        samples = gen_fn(fixed_noise)
 
-        plt.imsave('lsgan_text_{}.png'.format(epoch),
+        plt.imsave('images/lsgan_text/lsgan_sample_{}.png'.format(epoch),
                    (samples.reshape(6, 7, len(encoder.alphabet), patch_size)
                            .transpose(0, 2, 1, 3)
                            .reshape(6*len(encoder.alphabet), 7*patch_size)),
                    origin='bottom',
-                   cmap='jet')
-        fig, axes = plt.subplots(1, 2)
-        axes[0].plot(critic_losses)
-        axes[1].plot(generator_losses)
-        fig.savefig('lsgan_mnist_loss_epoch_{}'.format(epoch))
+                   cmap='gray')
+
+        epoch_critic_losses.append(np.mean(critic_losses))
+        epoch_generator_losses.append(np.mean(generator_losses))
+        fig, axes = plt.subplots(1, 2, figsize=(8, 3))
+        axes[0].set_title('Loss(C)')
+        axes[0].plot(epoch_critic_losses)
+        axes[1].set_title('Loss(G)')
+        axes[1].plot(epoch_generator_losses)
+        fig.tight_layout()
+        fig.savefig('images/lsgan_text/lsgan_epoch_{}'.format(epoch))
         plt.close('all')
 
         # After half the epochs, we start decaying the learn rate towards zero
         if epoch >= num_epochs // 2:
             progress = float(epoch) / num_epochs
-            eta.set_value(lasagne.utils.floatX(initial_eta*2*(1 - progress)))
-            plt.plot('')
+            deta.set_value(lasagne.utils.floatX(initial_deta*2*(1 - progress)))
+            geta.set_value(lasagne.utils.floatX(initial_geta*2*(1 - progress)))
 
     # Optionally, you could now dump the network weights to a file like this:
     np.savez('lsgan_text_gen.npz',
