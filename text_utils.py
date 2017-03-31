@@ -50,7 +50,8 @@ def binarizeText(text, encoder, lower_case=True, remove_stopwords=False,
     if remove_stopwords:
         text = removeStopwords(text.split(' '))
     text = np.array(encoder.encode(preprocess(text)), dtype=int)
-    return np.eye(len(encoder.alphabet), dtype=int)[:, text]
+    # +1 for dustbin
+    return np.eye(len(encoder.alphabet)+1, dtype=int)[:, text]
 
 
 class textEncoder():
@@ -65,7 +66,7 @@ class textEncoder():
 
     def encode(self, data):
         return [self.encoder[x]
-                if x in self.encoder else len(self.encoder) + 1
+                if x in self.encoder else len(self.encoder)
                 for x in data]
 
     def decode(self, data):
