@@ -69,7 +69,6 @@ def load_proll_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
     if not as_dict:
         data = []
         labels = []
-
     for folderpath in glob.glob(os.path.join(datapath, '*/')):
         composer = os.path.basename(os.path.normpath(folderpath))
         filepaths = glob.glob(os.path.join(
@@ -87,9 +86,9 @@ def load_proll_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
                 cur_data = np.nan_to_num(cur_data)
                 cur_data = cur_data * 2 - 1
             if patch_size:
-                ids = np.arange(0, len(cur_data) - patch_size, patch_size)
+                ids = np.arange(0, cur_data.shape[1] - patch_size, patch_size)
                 cur_data = np.array([
-                    cur_data[ids[i-1]:ids[i]] for i in range(1, len(ids))])
+                    cur_data[:, ids[i-1]:ids[i]] for i in range(1, len(ids))])
             if not as_dict:
                 if patch_size:
                     data.extend(cur_data)
