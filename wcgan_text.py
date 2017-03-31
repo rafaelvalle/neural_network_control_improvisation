@@ -412,9 +412,9 @@ def main(data_type, c_arch, g_arch, num_epochs, epoch_size, batch_size,
                     g_initial_eta*2*(1 - progress)))
 
         if (epoch % 9) == 0:
-            np.savez('{}_{}_gen_{}_{}.npz'.format(loss_type, data_type, name, epoch),
+            np.savez('models/{}_{}_gen_{}_{}.npz'.format(loss_type, data_type, name, epoch),
                      *lasagne.layers.get_all_param_values(generator))
-            np.savez('{}_{}_crit_{}_{}.npz'.format(loss_type, data_type, name, epoch),
+            np.savez('models/{}_{}_crit_{}_{}.npz'.format(loss_type, data_type, name, epoch),
                      *lasagne.layers.get_all_param_values(critic))
 
 if __name__ == '__main__':
