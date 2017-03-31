@@ -29,25 +29,25 @@ def BatchNorm(layer, include=True, mean=0.0, std=0):
 
 
 def build_generator(input_var, noise_size, cond_var=None, n_conds=0, arch=0,
-                    with_BatchNorm=True):
+                    with_BatchNorm=True, batch_size=None, n_steps=None):
     from lasagne.layers import InputLayer, ReshapeLayer, DenseLayer, concat
     from lasagne.layers import Upscale2DLayer, Conv2DLayer
     from lasagne.layers import TransposedConv2DLayer as Deconv2DLayer
     from lasagne.nonlinearities import LeakyRectify, rectify
-    from lasagne.init import GlorotUniform  #  Normal Orthogonal
+    from lasagne.init import GlorotUniform, Normal, Orthogonal
 
     # non_lin = LeakyRectify(0.01)
     non_lin = rectify
     # init = Orthogonal(np.sqrt(2/(1+0.01**2)))
-    # init = Normal(0.02, 0.0)
-    init = GlorotUniform()
+    init = Normal(0.02, 0.0)
+    # init = GlorotUniform()
 
-    layer = InputLayer(shape=(None, noise_size), input_var=input_var)
+    layer = InputLayer(shape=(batch_size, noise_size), input_var=input_var)
     if cond_var is not None:
         layer = BatchNorm(DenseLayer(
             layer, noise_size, nonlinearity=non_lin), with_BatchNorm)
         layer = concat([
-            layer, InputLayer(shape=(None, n_conds), input_var=cond_var)])
+            layer, InputLayer(shape=(batch_size, n_conds), input_var=cond_var)])
     if arch == 'dcgan':
         # DCGAN
         layer = BatchNorm(DenseLayer(
@@ -73,18 +73,51 @@ def build_generator(input_var, noise_size, cond_var=None, n_conds=0, arch=0,
         # fully-connected layers
         layer = BatchNorm(DenseLayer(
             layer, 1024, W=init, b=None), with_BatchNorm)
-        layer = BatchNorm(DenseLayer(
-            layer, 1024, W=init, b=None), with_BatchNorm)
         # project and reshape
         layer = BatchNorm(DenseLayer(
-            layer, 128*34*34, W=init, b=None), with_BatchNorm)
-        layer = ReshapeLayer(layer, ([0], 128, 34, 34))
-        # two fractional-stride convolutions
+            layer, 1024*8*8, W=init, b=None), with_BatchNorm)
+        layer = ReshapeLayer(layer, ([0], 1024, 8, 8))
+        # fractional-stride convolutions
+        layer = BatchNorm(Deconv2DLayer(
+            layer, 512, 5, stride=2, crop='same', W=init, b=None,
+            output_size=16, nonlinearity=non_lin), with_BatchNorm)
         layer = BatchNorm(Deconv2DLayer(
             layer, 256, 5, stride=2, crop='same', W=init, b=None,
-            nonlinearity=non_lin), with_BatchNorm)
+            output_size=32, nonlinearity=non_lin), with_BatchNorm)
+        layer = BatchNorm(Deconv2DLayer(
+            layer, 128, 5, stride=2, crop='same', W=init, b=None,
+            output_size=64, nonlinearity=non_lin), with_BatchNorm)
         layer = Deconv2DLayer(
-            layer, 1, 6, stride=2, crop='full', W=init, b=None,
+            layer, 1, 5, stride=2, crop='same', W=init, b=None,
+            output_size=128, nonlinearity=tanh_temperature)
+    elif 'cont-enc':
+        # build generator from concatenated prefix and noise features
+        layer = ReshapeLayer(layer, ([0], layer.output_shape[1], 1, 1))
+        layer = BatchNorm(Deconv2DLayer(
+            layer, 1024, 4, stride=1, crop=0, W=init), with_BatchNorm)
+        layer = BatchNorm(Deconv2DLayer(
+            layer, 512, 4, stride=2, crop=1, W=init), with_BatchNorm)
+        layer = BatchNorm(Deconv2DLayer(
+            layer, 256, 4, stride=2, crop=1, W=init), with_BatchNorm)
+        layer = BatchNorm(Deconv2DLayer(
+            layer, 128, 4, stride=2, crop=1, W=init), with_BatchNorm)
+        layer = BatchNorm(Deconv2DLayer(
+            layer, 128, 4, stride=2, crop=1, W=init), with_BatchNorm)
+        layer = Deconv2DLayer(
+            layer, 1, 4, stride=2, crop=1, W=init,
+            nonlinearity=tanh_temperature)
+    elif 'lsgan':
+        layer = batch_norm(DenseLayer(layer, 1024))
+        layer = batch_norm(DenseLayer(layer, 1024*8*8))
+        layer = ReshapeLayer(layer, ([0], 1024, 8, 8))
+        layer = batch_norm(Deconv2DLayer(
+            layer, 256, 5, stride=2, crop='same', output_size=16))
+        layer = batch_norm(Deconv2DLayer(
+            layer, 256, 5, stride=2, crop='same', output_size=32))
+        layer = batch_norm(Deconv2DLayer(
+            layer, 256, 5, stride=2, crop='same', output_size=64))
+        layer = Deconv2DLayer(
+            layer, 1, 5, stride=2, crop='same', output_size=128,
             nonlinearity=tanh_temperature)
     elif arch == 2:
         # non-overlapping transposed convolutions
@@ -237,12 +270,47 @@ def build_generator(input_var, noise_size, cond_var=None, n_conds=0, arch=0,
     return layer
 
 
-def build_generator_lstm(params, gate_params, cell_params, arch=1):
-    from lasagne.layers import InputLayer, DenseLayer, concat
-    from lasagne.layers import DropoutLayer
-    from lasagne.layers.recurrent import LSTMLayer
+def build_generator_lstm(input_var, noise_size, cond_var=None, n_conds=0,
+                         arch='lstm', with_BatchNorm=True, batch_size=None,
+                         n_steps=None):
+    from lasagne.layers import (
+        InputLayer, DenseLayer, LSTMLayer, ReshapeLayer, DimshuffleLayer,
+        concat, ExpressionLayer, NonlinearityLayer, DropoutLayer)
+
     from lasagne.init import Constant, HeNormal
-    if arch == 1:
+    from lasagne.nonlinearities import rectify, softmax
+    non_lin = rectify
+
+    layer = InputLayer(
+        shape=(batch_size, n_steps, noise_size), input_var=input_var)
+    if cond_var is not None:
+        layer = BatchNorm(DenseLayer(
+            layer, noise_size, nonlinearity=non_lin), with_BatchNorm)
+        layer = concat(
+            [layer, InputLayer(shape=(batch_size, n_steps, n_conds),
+                               input_var=cond_var)])
+    if arch == 'lstm':
+        layer = batch_norm(DenseLayer(layer, 1024, num_leading_axes=2))
+        # recurrent layers for bidirectional network
+        l_forward_noise = BatchNorm(LSTMLayer(
+            layer, 512, learn_init=True, grad_clipping=100,
+            only_return_final=False), with_BatchNorm)
+        l_backward_noise = BatchNorm(LSTMLayer(
+            layer, 512, learn_init=True, grad_clipping=100,
+            only_return_final=False, backwards=True), with_BatchNorm)
+        layer = concat([l_forward_noise, l_backward_noise], axis=2)
+        # dense layers
+        layer = BatchNorm(DenseLayer(
+            layer, 1024, num_leading_axes=2), with_BatchNorm)
+        layer = BatchNorm(DenseLayer(
+            layer, 128, num_leading_axes=2), with_BatchNorm)
+        # reshape to apply softmax per timestep
+        layer = ReshapeLayer(layer, (-1, [2]))
+        layer = NonlinearityLayer(layer, softmax)
+        layer = ReshapeLayer(layer, (input_var.shape[0], -1, [1]))
+        layer = DimshuffleLayer(layer, (0, 'x', 2, 1))
+        layer = ExpressionLayer(layer, lambda X: X*2 - 1)
+    elif arch == 1:
         # input layers
         l_in = InputLayer(
             shape=params['input_shape'], input_var=params['input_var'],
@@ -319,15 +387,8 @@ def build_generator_lstm(params, gate_params, cell_params, arch=1):
     elif arch == 3:
         raise Exception("arch 2 not implemented")
 
-    class Generator:
-        def __init__(self, l_in, l_noise, l_cond, l_mask, l_out):
-            self.l_in = l_in
-            self.l_noise = l_noise
-            self.l_cond = l_cond
-            self.l_mask = l_mask
-            self.l_out = l_out
-
-    return Generator(l_in, l_noise, l_cond, l_mask, l_out)
+    print("Generator output:", layer.output_shape)
+    return layer
 
 
 def build_discriminator_lstm(params, gate_params, cell_params):
@@ -380,7 +441,7 @@ def build_discriminator_lstm(params, gate_params, cell_params):
 
 
 def build_critic(input_var=None, cond_var=None, n_conds=0, arch=0,
-                 with_BatchNorm=True):
+                 with_BatchNorm=True, loss_type='wgan'):
     from lasagne.layers import (
         InputLayer, Conv2DLayer, DenseLayer, MaxPool2DLayer, concat,
         dropout, flatten)
@@ -416,21 +477,48 @@ def build_critic(input_var=None, cond_var=None, n_conds=0, arch=0,
         layer = BatchNorm(Conv2DLayer(
             layer, 512, 4, stride=2, pad=1, W=init, b=None, nonlinearity=lrelu),
             with_BatchNorm)
-        # fully-connected layer
-        layer = BatchNorm(DenseLayer(
-            layer, 1024, W=init, b=None, nonlinearity=lrelu), with_BatchNorm)
+    elif arch == 'cont-enc':
+        # convolution layers
+        layer = BatchNorm(Conv2DLayer(
+            layer, 64, 4, stride=2, pad=1, W=init, nonlinearity=lrelu),
+            with_BatchNorm)
+        layer = BatchNorm(Conv2DLayer(
+            layer, 64, 4, stride=2, pad=1, W=init, nonlinearity=lrelu),
+            with_BatchNorm)
+        layer = BatchNorm(Conv2DLayer(
+            layer, 128, 4, stride=2, pad=1, W=init, nonlinearity=lrelu),
+            with_BatchNorm)
+        layer = BatchNorm(Conv2DLayer(
+            layer, 256, 4, stride=2, pad=1, W=init, nonlinearity=lrelu),
+            with_BatchNorm)
+        layer = BatchNorm(Conv2DLayer(
+            layer, 512, 4, stride=2, pad=1, W=init, nonlinearity=lrelu),
+            with_BatchNorm)
     elif arch == 'mnist':
         # Jan Schluechter's MNIST discriminator
-        # two convolutions
+        # convolution layers
         layer = BatchNorm(Conv2DLayer(
-            layer, 64, 5, stride=2, pad='same', W=init, b=None,
+            layer, 128, 5, stride=2, pad='same', W=init, b=None,
             nonlinearity=lrelu), with_BatchNorm)
         layer = BatchNorm(Conv2DLayer(
             layer, 128, 5, stride=2, pad='same', W=init, b=None,
             nonlinearity=lrelu), with_BatchNorm)
+        layer = BatchNorm(Conv2DLayer(
+            layer, 128, 5, stride=2, pad='same', W=init, b=None,
+            nonlinearity=lrelu), with_BatchNorm)
+        # layer = BatchNorm(Conv2DLayer(
+        #     layer, 128, 5, stride=2, pad='same', W=init, b=None,
+        #      nonlinearity=lrelu), with_BatchNorm)
         # fully-connected layer
-        layer = BatchNorm(DenseLayer(
-            layer, 1024, W=init, b=None, nonlinearity=lrelu), with_BatchNorm)
+        # layer = BatchNorm(DenseLayer(
+        #     layer, 1024, W=init, b=None, nonlinearity=lrelu), with_BatchNorm)
+    elif arch == 'lsgan':
+        layer = batch_norm(Conv2DLayer(
+            layer, 256, 5, stride=2, pad='same', nonlinearity=lrelu))
+        layer = batch_norm(Conv2DLayer(
+            layer, 256, 5, stride=2, pad='same', nonlinearity=lrelu))
+        layer = batch_norm(Conv2DLayer(
+            layer, 256, 5, stride=2, pad='same', nonlinearity=lrelu))
     elif arch == 'crepe':
         # CREPE
         # form words from sequence of characters
@@ -466,7 +554,9 @@ def build_critic(input_var=None, cond_var=None, n_conds=0, arch=0,
         raise Exception("Model architecture {} is not supported".format(arch))
         # output layer (linear and without bias)
     if cond_var is not None:
+        layer = DenseLayer(layer, 1024, nonlinearity=lrelu, b=None)
         layer = concat([layer, layer_cond])
-    layer = DenseLayer(layer, 1, nonlinearity=None, b=None)
+
+    layer = DenseLayer(layer, 1, b=None, nonlinearity=None)
     print("Critic output:", layer.output_shape)
     return layer
