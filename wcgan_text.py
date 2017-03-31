@@ -27,7 +27,7 @@ import theano
 import theano.tensor as T
 import lasagne
 
-from models import build_generator, build_critic
+from models import build_generator, build_generator_lstm, build_critic
 from data_processing import load_proll_data, load_text_data, encode_labels
 from text_utils import textEncoder
 import pdb
@@ -35,19 +35,18 @@ import pdb
 # add (real, fake) pair as input
 
 
-def iterate_minibatches_proll(inputs, labels, batchsize, shuffle=True,
+def iterate_minibatches_proll(inputs, labels, batch_size, shuffle=True,
                               forever=True, length=128):
     if shuffle:
         indices = np.arange(len(inputs))
     while True:
         if shuffle:
             np.random.shuffle(indices)
-        for start_idx in range(0, len(inputs) - batchsize + 1, batchsize):
+        for start_idx in range(0, len(inputs) - batch_size + 1, batch_size):
             if shuffle:
-                excerpt = indices[start_idx:start_idx + batchsize]
+                excerpt = indices[start_idx:start_idx + batch_size]
             else:
-                excerpt = slice(start_idx, start_idx + batchsize)
-
+                excerpt = slice(start_idx, start_idx + batch_size)
             if length > 0:
                 data = []
                 # select random slice from each piano roll
@@ -64,7 +63,7 @@ def iterate_minibatches_proll(inputs, labels, batchsize, shuffle=True,
             break
 
 
-def iterate_minibatches_text(inputs, labels, batchsize, encoder, shuffle=True,
+def iterate_minibatches_text(inputs, labels, batch_size, encoder, shuffle=True,
                              forever=True, length=128, alphabet_size=128,
                              padding=None):
     from text_utils import binarizeText
@@ -73,11 +72,11 @@ def iterate_minibatches_text(inputs, labels, batchsize, encoder, shuffle=True,
     while True:
         if shuffle:
             np.random.shuffle(indices)
-        for start_idx in range(0, len(inputs) - batchsize + 1, batchsize):
+        for start_idx in range(0, len(inputs) - batch_size + 1, batch_size):
             if shuffle:
-                excerpt = indices[start_idx:start_idx + batchsize]
+                excerpt = indices[start_idx:start_idx + batch_size]
             else:
-                excerpt = slice(start_idx, start_idx + batchsize)
+                excerpt = slice(start_idx, start_idx + batch_size)
 
             data = []
             # select random slice from each piano roll
@@ -116,6 +115,8 @@ def iterate_minibatches_text(inputs, labels, batchsize, encoder, shuffle=True,
                         0, cur_data.shape[1] - length)
                     cur_data = cur_data[:, rand_start:rand_start+length]
                     data.append(cur_data)
+                else:
+                    data.append(cur_data)
             # scale to [-1, 1]
             data = np.array(data)
             data += data.min()
@@ -127,9 +128,10 @@ def iterate_minibatches_text(inputs, labels, batchsize, encoder, shuffle=True,
             break
 
 
-def build_functions(critic, generator, clip, batchsize, input_var, noise_var,
+def build_functions(critic, generator, clip, batch_size, input_var, noise_var,
                     cond_var, c_eta, g_eta, noise_size, loss_type,
-                    build_grads=False):
+                    build_grads=False, n_steps=None, g_arch=None):
+
     # Create expression for passing real data through the critic
     real_out = lasagne.layers.get_output(critic)
     # Create expression for passing fake data through the critic
@@ -162,24 +164,32 @@ def build_functions(critic, generator, clip, batchsize, input_var, noise_var,
     # Create update expressions for training
     generator_params = lasagne.layers.get_all_params(generator, trainable=True)
     critic_params = lasagne.layers.get_all_params(critic, trainable=True)
-    generator_updates = lasagne.updates.rmsprop(
-            -generator_score, generator_params, learning_rate=g_eta)
-    critic_updates = lasagne.updates.rmsprop(
-            -critic_score, critic_params, learning_rate=c_eta)
+    if loss_type == 'wgan':
+        generator_updates = lasagne.updates.rmsprop(
+                -generator_score, generator_params, learning_rate=g_eta)
+        critic_updates = lasagne.updates.rmsprop(
+                -critic_score, critic_params, learning_rate=c_eta)
+    elif loss_type == 'lsgan':
+        generator_updates = lasagne.updates.rmsprop(
+                generator_score, generator_params, learning_rate=g_eta)
+        critic_updates = lasagne.updates.rmsprop(
+                critic_score, critic_params, learning_rate=c_eta)
 
     if clip != 0:
         # Clip critic parameters in a limited range around value (except biases)
         for param in lasagne.layers.get_all_params(critic, trainable=True,
-                                                regularizable=True):
+                                                   regularizable=True):
             critic_updates[param] = T.clip(critic_updates[param], -clip, clip)
 
-    # Instantiate a symbolic noise generator to use for training
+    # instantiate a symbolic noise generator to use in training
     from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
     srng = RandomStreams(seed=np.random.randint(2147462579, size=6))
-    noise = srng.normal((batchsize, noise_size))
+    if g_arch.startswith("lstm"):
+        noise = srng.normal((batch_size, n_steps, noise_size))
+    else:
+        noise = srng.normal((batch_size, noise_size))
 
-    # Compile functions performing a training step on a mini-batch (according
-    # to the updates dictionary) and returning the corresponding score:
+    # prepare symbolic input variables given condition
     if cond_var:
         gen_input = [cond_var]
         cri_input = [input_var, cond_var]
@@ -188,12 +198,12 @@ def build_functions(critic, generator, clip, batchsize, input_var, noise_var,
         gen_input = []
         cri_input = [input_var]
         samp_input = [noise_var]
-    generator_train_fn = theano.function(gen_input,
-                                         generator_score,
+
+    # train functions
+    generator_train_fn = theano.function(gen_input, generator_score,
                                          givens={noise_var: noise},
                                          updates=generator_updates)
-    critic_train_fn = theano.function(cri_input,
-                                      critic_score,
+    critic_train_fn = theano.function(cri_input, critic_score,
                                       givens={noise_var: noise},
                                       updates=critic_updates)
 
@@ -201,6 +211,7 @@ def build_functions(critic, generator, clip, batchsize, input_var, noise_var,
     gen_fn = theano.function(samp_input,
                              lasagne.layers.get_output(generator,
                                                        deterministic=True))
+    # compile functions for looking at gradients
     if build_grads:
         critic_grad_tn = theano.grad(critic_score, critic_params)
         critic_grad_fn = theano.function(cri_input,
@@ -218,12 +229,13 @@ def build_functions(critic, generator, clip, batchsize, input_var, noise_var,
             generator_grad_fn)
 
 
-def main(datatype, c_arch, g_arch, num_epochs, epoch_size, batchsize,
+def main(data_type, c_arch, g_arch, num_epochs, epoch_size, batch_size,
          c_initial_eta, g_initial_eta, clip, noise_size, boolean, conditional,
-         c_batch_norm, g_batch_norm, c_iters, cl_iters, loss_type):
+         c_batch_norm, g_batch_norm, c_iters, cl_iters, loss_type, name,
+         cl_freq, weight_decay):
     # Load the data according to datatype
     print("Loading data...")
-    if datatype == 'text':
+    if data_type == 'text':
         datapaths = (
             '/media/steampunkhd/rafaelvalle/datasets/TEXT/ag_news_csv/train.csv',)
             #'/media/steampunkhd/rafaelvalle/datasets/TEXT/ag_news_csv/test.csv')
@@ -232,38 +244,39 @@ def main(datatype, c_arch, g_arch, num_epochs, epoch_size, batchsize,
         label_cols = (0, 0)
         n_pieces = 0  # 0 is equal to all pieces, unbalanced dataset
         as_dict = False
-        patch_size = 128
+        n_steps = 128
         padding = 'repeat'
         inputs, labels = load_text_data(
             datapaths, data_cols, label_cols, n_pieces, as_dict,
-            patch_size=patch_size)
-
-        data_size = 5000
-        inputs = inputs[:data_size]
-        labels = labels[:data_size]
+            patch_size=n_steps)
         iterator = iterate_minibatches_text
         # alphabet = list("abcdefghijklmnopqrstuvwxyz0123456789-,;.!?:'\"/\\|_@#$%^&*~`+ =<>()[]{}")
-        alphabet = [chr(x) for x in range(128)]
+        alphabet = [chr(x) for x in range(127)]
         encoder = textEncoder(alphabet)
+        alphabet_size = len(encoder.alphabet) + 1
         pkl.dump(encoder, open("encdec.pkl", "wb"))
-
-    elif datatype == 'proll':
+        i_len = 128
+    elif data_type == 'proll':
         datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/JazzSolos'
         glob_file_str = '*.npy'
         n_pieces = 0  # 0 is equal to all pieces, unbalanced dataset
         crop = None  # (32, 96)
+        alphabet_size = 128
         as_dict = False
+        n_steps = 128
+        i_len = 0
         inputs, labels = load_proll_data(
-            datapath, glob_file_str, n_pieces, crop, as_dict, patch_size=128)
+            datapath, glob_file_str, n_pieces, crop, as_dict,
+            patch_size=n_steps)
         if boolean:
             inputs += inputs.min()
             inputs /= inputs.max()
             inputs = inputs.astype(bool)
             # project to [-1, 1]
             inputs = lasagne.utils.floatX((inputs * 2) - 1)
-            iterator = iterate_minibatches_proll
+        iterator = iterate_minibatches_proll
     else:
-        raise Exception("Datatype {} not supported".format(datatype))
+        raise Exception("Datatype {} not supported".format(data_type))
 
     # encode labels
     labels = encode_labels(labels, one_hot=True).astype(np.float32)
@@ -275,11 +288,19 @@ def main(datatype, c_arch, g_arch, num_epochs, epoch_size, batchsize,
         fixed_condition = lasagne.utils.floatX(np.eye(labels.shape[1])[
             np.repeat(np.arange(labels.shape[1]), 1+(n_samples / labels.shape[1]))])
         fixed_condition = fixed_condition[:n_samples]
-    fixed_noise = lasagne.utils.floatX(np.random.rand(n_samples, noise_size))
 
-    # Prepare Theano variables
+    # Prepare theano variables
+    if g_arch.startswith('lstm'):
+        fixed_noise = lasagne.utils.floatX(
+            np.random.rand(n_samples, n_steps, noise_size))
+        noise_var = T.ftensor3('noise')
+        build_gen = build_generator_lstm
+    else:
+        build_gen = build_generator
+        fixed_noise = lasagne.utils.floatX(np.random.rand(n_samples, noise_size))
+        noise_var = T.fmatrix('noise')
+
     input_var = T.ftensor4('inputs')
-    noise_var = T.fmatrix('noise')
     cond_var = None
     if conditional:
         cond_var = T.fmatrix('condition')
@@ -290,10 +311,12 @@ def main(datatype, c_arch, g_arch, num_epochs, epoch_size, batchsize,
 
     # Create neural network model
     print("Building model and compiling functions...")
-    generator = build_generator(
-        noise_var, noise_size, cond_var, labels.shape[1], g_arch, g_batch_norm)
+    generator = build_gen(
+        noise_var, noise_size, cond_var, labels.shape[1], g_arch, g_batch_norm,
+        batch_size=None, n_steps=n_steps)
     critic = build_critic(
-        input_var, cond_var, labels.shape[1], c_arch, c_batch_norm)
+        input_var, cond_var, labels.shape[1], c_arch, c_batch_norm,
+        loss_type=loss_type)
     print("Generator {} #params {}\nModel {}".format(
         g_arch, lasagne.layers.count_params(generator),
         lasagne.layers.get_all_layers(generator)))
@@ -303,21 +326,22 @@ def main(datatype, c_arch, g_arch, num_epochs, epoch_size, batchsize,
 
     # Build train and sampling functions
     g_train_fn, c_train_fn, g_gen_fn, c_grad_fn, g_grad_fn = build_functions(
-        critic, generator, clip, batchsize, input_var, noise_var, cond_var,
-        c_eta, g_eta, noise_size, loss_type)
+        critic, generator, clip, batch_size, input_var, noise_var, cond_var,
+        c_eta, g_eta, noise_size, loss_type, n_steps=n_steps, g_arch=g_arch)
 
     # Create an infinite supply of batches (as an iterable generator)
-    if datatype == 'text':
+    if data_type == 'text':
         batches = iterator(
-            inputs, labels, batchsize, encoder, shuffle=True, length=patch_size,
-            forever=True, alphabet_size=len(encoder.alphabet), padding=padding)
-    elif datatype == 'proll':
+            inputs, labels, batch_size, encoder, shuffle=True, length=i_len,
+            forever=True, alphabet_size=alphabet_size, padding=padding)
+    elif data_type == 'proll':
         batches = iterator(
-            inputs, labels, batchsize, shuffle=True, length=128, forever=True)
+            inputs, labels, batch_size, shuffle=True, length=i_len,
+            forever=True)
 
     # set variables for storing scores
     if not epoch_size:
-        epoch_size = len(inputs) / batchsize
+        epoch_size = len(inputs) / batch_size
     generator_updates = 0
     epoch_critic_scores = []
     epoch_generator_scores = []
@@ -327,7 +351,7 @@ def main(datatype, c_arch, g_arch, num_epochs, epoch_size, batchsize,
         critic_scores = []
         generator_scores = []
         for _ in tqdm(range(epoch_size)):
-            if (generator_updates < 25) or (generator_updates % 500 == 0):
+            if (generator_updates < 25) or (generator_updates % cl_freq== 0):
                 critic_runs = cl_iters # 100
             else:
                 critic_runs = c_iters # 5
@@ -337,10 +361,9 @@ def main(datatype, c_arch, g_arch, num_epochs, epoch_size, batchsize,
                 batch_in = batch_in.reshape(
                     (batch_in.shape[0], 1, batch_in.shape[1], batch_in.shape[2]))
                 if cond_var:
-                    train_input = [batch_in, batch_cond]
+                    critic_scores.append(c_train_fn(batch_in, batch_cond))
                 else:
-                    train_input = batch_in
-                critic_scores.append(c_train_fn(train_input))
+                    critic_scores.append(c_train_fn(batch_in))
             if cond_var:
                 generator_scores.append(g_train_fn(batch_cond))
             else:
@@ -353,8 +376,8 @@ def main(datatype, c_arch, g_arch, num_epochs, epoch_size, batchsize,
               epoch + 1, num_epochs, time.time() - start_time,
               np.mean(critic_scores), np.mean(generator_scores)))
 
-        epoch_critic_scores.append(np.mean(generator_scores))
-        epoch_generator_scores.append(np.mean(critic_scores))
+        epoch_critic_scores.append(np.mean(critic_scores))
+        epoch_generator_scores.append(np.mean(generator_scores))
 
         fig, axes = plt.subplots(1, 2, figsize=(8, 3))
         axes[0].set_title('Loss(C)')
@@ -362,7 +385,8 @@ def main(datatype, c_arch, g_arch, num_epochs, epoch_size, batchsize,
         axes[1].set_title('Loss(G)')
         axes[1].plot(epoch_generator_scores)
         fig.tight_layout()
-        fig.savefig('images/wcgan_{}/g_updates{}'.format(datatype, epoch))
+        fig.savefig('images/{}_{}/{}_g_updates'.format(
+            loss_type, data_type, name))
         plt.close('all')
 
         # plot and create midi from generated data
@@ -370,34 +394,32 @@ def main(datatype, c_arch, g_arch, num_epochs, epoch_size, batchsize,
             samples = g_gen_fn(fixed_noise, fixed_condition)
         else:
             samples = g_gen_fn(fixed_noise)
-        plt.imsave('images/wcgan_{}/wcgan_gits{}.png'.format(datatype, epoch),
-                   (samples.reshape(12, 12, len(encoder.alphabet), patch_size)
+        plt.imsave('images/{}_{}/{}_gits{}.png'.format(loss_type, data_type, name, epoch),
+                   (samples.reshape(12, 12, alphabet_size, n_steps)
                            .transpose(0, 2, 1, 3)
-                           .reshape(12*len(encoder.alphabet), 12*patch_size)),
+                           .reshape(12*alphabet_size, 12*n_steps)),
                    origin='bottom',
-                   cmap='jet')
-        if datatype == 'text':
-            np.save('text/wcgan_text/wcgan_gits{}.npy'.format(epoch), samples)
-        else:
-            np.save('midi/wcgan_proll/wcgan_gits{}.npy'.format(epoch), samples)
+                   cmap='gray')
+        np.save('{1}/{0}_{1}/{2}_gits{3}.npy'.format(loss_type, data_type, name, epoch), samples)
 
         # After half the epochs, we start decaying the learn rate towards zero
-        if epoch >= num_epochs // 2:
-            progress = float(epoch) / num_epochs
-            c_eta.set_value(lasagne.utils.floatX(
-                c_initial_eta*2*(1 - progress)))
-            g_eta.set_value(lasagne.utils.floatX(
-                g_initial_eta*2*(1 - progress)))
+        if weight_decay:
+            if epoch >= num_epochs // 2:
+                progress = float(epoch) / num_epochs
+                c_eta.set_value(lasagne.utils.floatX(
+                    c_initial_eta*2*(1 - progress)))
+                g_eta.set_value(lasagne.utils.floatX(
+                    g_initial_eta*2*(1 - progress)))
 
         if (epoch % 9) == 0:
-            np.savez('wcgan_{}_gen_{}.npz'.format(datatype, epoch),
+            np.savez('{}_{}_gen_{}_{}.npz'.format(loss_type, data_type, name, epoch),
                      *lasagne.layers.get_all_param_values(generator))
-            np.savez('wcgan_{}_crit_{}.npz'.format(datatype, epoch),
+            np.savez('{}_{}_crit_{}_{}.npz'.format(loss_type, data_type, name, epoch),
                      *lasagne.layers.get_all_param_values(critic))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description="Trains WCGAN on Sequential data and generates output",
+        description="Trains GAN on Sequential data and generates output",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     parser.add_argument("datatype", type=str, default='text',
@@ -434,10 +456,17 @@ if __name__ == '__main__':
                         help="Discriminator large iters")
     parser.add_argument("-l", "--loss_type", type=str, default='wgan',
                         help="Loss type <wgan, lsgan>")
+    parser.add_argument("--name", type=str, default='name',
+                        help="Name to include in saved files")
+    parser.add_argument("--cl_freq", type=int, default=500,
+                        help="Frequency of large updates")
+    parser.add_argument("--decay", type=int, default=1,
+                        help="Apply weight decay?")
 
     args = parser.parse_args()
     print(args)
     main(args.datatype, args.critic, args.generator, args.n_epochs,
          args.epoch_size, args.bs, args.clr, args.glr, args.clip,
          args.noise_size, args.boolean, args.condition, args.cbn, args.gbn,
-         args.c_iters, args.cl_iters, args.loss_type)
+         args.c_iters, args.cl_iters, args.loss_type, args.name,
+         args.cl_freq, args.decay)
