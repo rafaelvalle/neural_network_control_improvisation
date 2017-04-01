@@ -385,7 +385,7 @@ def main(data_type, c_arch, g_arch, num_epochs, epoch_size, batch_size,
         axes[1].set_title('Loss(G)')
         axes[1].plot(epoch_generator_scores)
         fig.tight_layout()
-        fig.savefig('images/{}_{}/{}_g_updates'.format(
+        fig.savefig('images/{}_{}/{}_g_updates.png'.format(
             loss_type, data_type, name))
         plt.close('all')
 
