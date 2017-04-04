@@ -232,7 +232,7 @@ def build_functions(critic, generator, clip, batch_size, input_var, noise_var,
 def main(data_type, c_arch, g_arch, num_epochs, epoch_size, batch_size,
          c_initial_eta, g_initial_eta, clip, noise_size, boolean, conditional,
          c_batch_norm, g_batch_norm, c_iters, cl_iters, loss_type, name,
-         cl_freq, weight_decay):
+         cl_freq, weight_decay, save_model_every):
     # Load the data according to datatype
     print("Loading data...")
     if data_type == 'text':
@@ -411,7 +411,7 @@ def main(data_type, c_arch, g_arch, num_epochs, epoch_size, batch_size,
                 g_eta.set_value(lasagne.utils.floatX(
                     g_initial_eta*2*(1 - progress)))
 
-        if (epoch % 9) == 0:
+        if (epoch % save_model_every) == 0:
             np.savez('models/{}_{}_gen_{}_{}.npz'.format(loss_type, data_type, name, epoch),
                      *lasagne.layers.get_all_param_values(generator))
             np.savez('models/{}_{}_crit_{}_{}.npz'.format(loss_type, data_type, name, epoch),
@@ -462,6 +462,8 @@ if __name__ == '__main__':
                         help="Frequency of large updates")
     parser.add_argument("--decay", type=int, default=1,
                         help="Apply weight decay?")
+    parser.add_argument("-s", "--save_model_every", type=int, default=9,
+                        help="Save model every?")
 
     args = parser.parse_args()
     print(args)
@@ -469,4 +471,4 @@ if __name__ == '__main__':
          args.epoch_size, args.bs, args.clr, args.glr, args.clip,
          args.noise_size, args.boolean, args.condition, args.cbn, args.gbn,
          args.c_iters, args.cl_iters, args.loss_type, args.name,
-         args.cl_freq, args.decay)
+         args.cl_freq, args.decay, args.save_model_every)
