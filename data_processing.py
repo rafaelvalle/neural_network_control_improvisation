@@ -1,9 +1,26 @@
 import os
+from datetime import datetime as dt
 from collections import defaultdict
 import numpy as np
 import pandas as pd
 import glob2 as glob
 import pdb
+
+
+def create_folder_structure(data_type, loss_type):
+    if not os.path.exists(data_type):
+        os.makedirs(data_type)
+    if not os.path.exists(data_type+"/"+loss_type):
+        os.makedirs(data_type+"/"+loss_type)
+
+    folder_name = "{}/{}/{}".format(
+        data_type, loss_type,
+        dt.now().strftime('%Y_%m_%d_%H_%M_%S'))
+    os.makedirs(folder_name)
+    os.makedirs(folder_name + "/models")
+    os.makedirs(folder_name + "/images")
+    os.makedirs(folder_name + "/samples")
+    return folder_name
 
 
 def encode_labels(labels, one_hot=False):
