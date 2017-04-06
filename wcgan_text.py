@@ -15,6 +15,7 @@ from __future__ import print_function
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from datetime import datetime
 
 from tqdm import tqdm
 import time
@@ -28,7 +29,8 @@ import theano.tensor as T
 import lasagne
 
 from models import build_generator, build_generator_lstm, build_critic
-from data_processing import load_proll_data, load_text_data, encode_labels
+from data_processing import (
+    load_proll_data, load_text_data, encode_labels, create_folder_structure)
 from text_utils import textEncoder
 import pdb
 
@@ -153,10 +155,7 @@ def build_functions(critic, generator, clip, batch_size, input_var, noise_var,
         cri_input = [input_var]
         samp_input = [noise_var]
 
-    # get params of each network
-    generator_params = lasagne.layers.get_all_params(generator, trainable=True)
-    critic_params = lasagne.layers.get_all_params(critic, trainable=True)
-
+    fake_in = lasagne.layers.get_output(generator)
     # Create expression for passing real data through the critic
     real_out = lasagne.layers.get_output(critic)
     # Create expression for passing fake data through the critic
@@ -167,47 +166,59 @@ def build_functions(critic, generator, clip, batch_size, input_var, noise_var,
         d_cond_layer = [l for l in lasagne.layers.get_all_layers(critic)
                         if l.name == 'd_in_condition'][0]
         fake_out = lasagne.layers.get_output(
-            critic,
-            inputs={d_in_layer: lasagne.layers.get_output(generator),
-                    d_cond_layer: cond_var})
+            critic, inputs={d_in_layer: fake_in, d_cond_layer: cond_var})
     else:
         print("Unconditional Network")
-        fake_out = lasagne.layers.get_output(
-            critic, lasagne.layers.get_output(generator))
-
+        fake_out = lasagne.layers.get_output(critic, fake_in)
     # Create score expressions to be maximized (i.e., negative losses)
     if loss_type in ('wgan', 'iwgan'):
-        generator_score = -fake_out.mean()
-        critic_score = fake_out.mean() - real_out.mean()
-        if loss_type == 'iwgan':
-            """
-            differences = fake_inputs - real_inputs
-            interpolates = real_inputs + (alpha*differences)
-            gradients = tf.gradients(Discriminator(interpolates)[0], [interpolates])[0]
-            slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=[1,2]))
-            gradient_penalty = tf.reduce_mean((slopes-1.)**2)
-            disc_cost += LAMBDA*gradient_penalty
-            """
-
-            LAMBDA = 10
-            differences = lasagne.layers.get_output(generator) - input_var
-            interpolates = input_var + (alpha*differences)
-            gradients = theano.grad(real_out[0], interpolates)[0]
-            # slopes = T.sqrt(T.sum(T.sqr(gradients), axis=(1, 2)))
-            # gradient_penalty = T.mean((slopes-1.)**2)
-            # critic_score += LAMBDA * gradient_penalty
+        generator_score = fake_out.mean()
+        critic_score = real_out.mean() - fake_out.mean()
     elif loss_type == 'lsgan':
         # a, b, c = -1, 1, 0  # Equation (8) in the paper
         a, b, c = 0, 1, 1  # Equation (9) in the paper
         generator_score = lasagne.objectives.squared_error(fake_out, c).mean()
         critic_score = (lasagne.objectives.squared_error(real_out, b).mean() +
                         lasagne.objectives.squared_error(fake_out, a).mean())
+    # regularization
+    critic_penalty = T.sum(T.zeros((1,)))
+    generator_penalty = T.sum(T.zeros((1,)))
+
+    if loss_type == 'iwgan':
+        LAMBDA = 10
+        differences = fake_in - input_var
+        interpolates = input_var + (alpha*differences)
+        gradients = theano.grad(
+            lasagne.layers.get_output(critic, interpolates).sum(),
+            wrt=interpolates)
+        slopes = T.sqrt(T.sum(T.sqr(gradients), axis=(1, 2, 3)))
+        critic_penalty = -(LAMBDA * T.mean((slopes-1.)**2))
+
+    critic_score += critic_penalty
+    generator_score += generator_penalty
+
+    # get params of each network
+    generator_params = lasagne.layers.get_all_params(generator, trainable=True)
+    critic_params = lasagne.layers.get_all_params(critic, trainable=True)
 
     # Create update expressions for training
-    generator_updates = lasagne.updates.rmsprop(
-            generator_score, generator_params, learning_rate=g_eta)
-    critic_updates = lasagne.updates.rmsprop(
-            critic_score, critic_params, learning_rate=c_eta)
+    if loss_type == 'wgan':
+        generator_updates = lasagne.updates.rmsprop(
+                -generator_score, generator_params, learning_rate=g_eta)
+        critic_updates = lasagne.updates.rmsprop(
+                -critic_score, critic_params, learning_rate=c_eta)
+    elif loss_type == 'iwgan':
+        generator_updates = lasagne.updates.adam(
+                -generator_score, generator_params, learning_rate=g_eta,
+                beta1=0.5, beta2=0.9)
+        critic_updates = lasagne.updates.adam(
+                -critic_score, critic_params, learning_rate=c_eta,
+                beta1=0.5, beta2=0.9)
+    else:
+        generator_updates = lasagne.updates.rmsprop(
+                generator_score, generator_params, learning_rate=g_eta)
+        critic_updates = lasagne.updates.rmsprop(
+                critic_score, critic_params, learning_rate=c_eta)
 
     if loss_type != 'iwgan' and clip != 0:
         # Clip critic parameters in a limited range around value (except biases)
@@ -215,19 +226,22 @@ def build_functions(critic, generator, clip, batch_size, input_var, noise_var,
                                                    regularizable=True):
             critic_updates[param] = T.clip(critic_updates[param], -clip, clip)
 
-
     # train functions
-    generator_train_fn = theano.function(gen_input, [generator_score, gradients],
-                                         givens={noise_var: noise},
-                                         updates=generator_updates)
-    critic_train_fn = theano.function(cri_input, critic_score,
-                                      givens={noise_var: noise},
-                                      updates=critic_updates)
+    generator_train_fn = theano.function(
+        gen_input,
+        [generator_score, generator_penalty],
+        givens={noise_var: noise},
+        updates=generator_updates)
+    critic_train_fn = theano.function(
+        cri_input,
+        [critic_score, critic_penalty],
+        givens={noise_var: noise},
+        updates=critic_updates)
 
-    # Compile another function generating some data
-    gen_fn = theano.function(samp_input,
-                             lasagne.layers.get_output(generator,
-                                                       deterministic=True))
+    # compile another function generating some data
+    gen_fn = theano.function(
+        samp_input, lasagne.layers.get_output(generator, deterministic=True))
+
     # compile functions for looking at gradients
     if build_grads:
         critic_grad_tn = theano.grad(critic_score, critic_params)
@@ -248,8 +262,8 @@ def build_functions(critic, generator, clip, batch_size, input_var, noise_var,
 
 def main(data_type, c_arch, g_arch, num_epochs, epoch_size, batch_size,
          c_initial_eta, g_initial_eta, clip, noise_size, boolean, conditional,
-         c_batch_norm, g_batch_norm, c_iters, cl_iters, loss_type, name,
-         cl_freq, weight_decay, save_model_every):
+         c_batch_norm, g_batch_norm, c_iters, cl_iters, loss_type, cl_freq,
+         weight_decay, save_model_every, trial_path):
     # Load the data according to datatype
     print("Loading data...")
     if data_type == 'text':
@@ -294,6 +308,7 @@ def main(data_type, c_arch, g_arch, num_epochs, epoch_size, batch_size,
         iterator = iterate_minibatches_proll
     else:
         raise Exception("Datatype {} not supported".format(data_type))
+
 
     # encode labels
     labels = encode_labels(labels, one_hot=True).astype(np.float32)
@@ -341,6 +356,10 @@ def main(data_type, c_arch, g_arch, num_epochs, epoch_size, batch_size,
         c_arch, lasagne.layers.count_params(critic),
         lasagne.layers.get_all_layers(critic)))
 
+    # save blank generator and critic
+    pkl.dump(generator,
+             open("{}/models/generator_blank.pkl".format(trial_path), "wb"))
+
     # Build train and sampling functions
     g_train_fn, c_train_fn, g_gen_fn, c_grad_fn, g_grad_fn = build_functions(
         critic, generator, clip, batch_size, input_var, noise_var, cond_var,
@@ -362,6 +381,7 @@ def main(data_type, c_arch, g_arch, num_epochs, epoch_size, batch_size,
     generator_iterations = 0
     epoch_critic_scores = []
     epoch_generator_scores = []
+
     print("Starting training...")
     for epoch in range(num_epochs):
         start_time = time.time()
@@ -369,9 +389,9 @@ def main(data_type, c_arch, g_arch, num_epochs, epoch_size, batch_size,
         generator_scores = []
         for _ in tqdm(range(epoch_size)):
             if (generator_iterations < 25) or (generator_iterations % cl_freq== 0):
-                critic_runs = cl_iters # 100
+                critic_runs = cl_iters
             else:
-                critic_runs = c_iters # 5
+                critic_runs = c_iters
             for _ in range(critic_runs):
                 batch_in, batch_cond = next(batches)
                 # reshape batch to proper dimensions
@@ -380,8 +400,7 @@ def main(data_type, c_arch, g_arch, num_epochs, epoch_size, batch_size,
                 if cond_var:
                     critic_scores.append(c_train_fn(batch_in, batch_cond))
                 else:
-                    loss, grads = c_train_fn(batch_in)
-                    # critic_scores.append(c_train_fn(batch_in))
+                    critic_scores.append(c_train_fn(batch_in))
             if cond_var:
                 generator_scores.append(g_train_fn(batch_cond))
             else:
@@ -390,21 +409,24 @@ def main(data_type, c_arch, g_arch, num_epochs, epoch_size, batch_size,
 
         # Then we print the results for this epoch:
         print("""Epoch {} of {} took {:.3f}s\t
-              Critic Loss {} \t Generator Loss {}""".format(
+              Critic Loss {} \n\t\tGenerator Loss {}""".format(
               epoch + 1, num_epochs, time.time() - start_time,
-              np.mean(critic_scores), np.mean(generator_scores)))
+              np.mean(critic_scores, axis=0), np.mean(generator_scores, axis=0)))
+        epoch_critic_scores.append(np.mean(critic_scores, axis=0))
+        epoch_generator_scores.append(np.mean(generator_scores, axis=0))
 
-        epoch_critic_scores.append(np.mean(critic_scores))
-        epoch_generator_scores.append(np.mean(generator_scores))
-
-        fig, axes = plt.subplots(1, 2, figsize=(8, 3))
+        fig, axes = plt.subplots(2, 2, figsize=(8, 8))
+        axes = axes.flatten()
         axes[0].set_title('Loss(C)')
-        axes[0].plot(epoch_critic_scores)
         axes[1].set_title('Loss(G)')
-        axes[1].plot(epoch_generator_scores)
+        axes[2].set_title('Penalty(C)')
+        axes[3].set_title('Penalty(G)')
+        axes[0].plot(np.array(epoch_critic_scores)[:, 0])
+        axes[1].plot(np.array(epoch_generator_scores)[:, 0])
+        axes[2].plot(np.array(epoch_critic_scores)[:, 1])
+        axes[3].plot(np.array(epoch_generator_scores)[:, 1])
         fig.tight_layout()
-        fig.savefig('images/{}_{}/{}_g_updates.png'.format(
-            loss_type, data_type, name))
+        fig.savefig('{}/images/g_updates.png'.format(trial_path))
         plt.close('all')
 
         # plot and create midi from generated data
@@ -412,13 +434,13 @@ def main(data_type, c_arch, g_arch, num_epochs, epoch_size, batch_size,
             samples = g_gen_fn(fixed_noise, fixed_condition)
         else:
             samples = g_gen_fn(fixed_noise)
-        plt.imsave('images/{}_{}/{}_gits{}.png'.format(loss_type, data_type, name, epoch),
+        plt.imsave('{}/images/gits_{}.png'.format(trial_path, epoch),
                    (samples.reshape(12, 12, alphabet_size, n_steps)
                            .transpose(0, 2, 1, 3)
                            .reshape(12*alphabet_size, 12*n_steps)),
                    origin='bottom',
                    cmap='gray')
-        np.save('{1}/{0}_{1}/{2}_gits{3}.npy'.format(loss_type, data_type, name, epoch), samples)
+        np.save('{}/samples/gits_{}.npy'.format(trial_path, epoch), samples)
 
         # After half the epochs, we start decaying the learn rate towards zero
         if weight_decay:
@@ -429,10 +451,10 @@ def main(data_type, c_arch, g_arch, num_epochs, epoch_size, batch_size,
                 g_eta.set_value(lasagne.utils.floatX(
                     g_initial_eta*2*(1 - progress)))
 
-        if (epoch % save_model_every) == 0:
-            np.savez('models/{}_{}_gen_{}_{}.npz'.format(loss_type, data_type, name, epoch),
+        if (epoch % save_model_every) == 9:
+            np.savez('{}/models/gen_{}.npz'.format(trial_path, epoch),
                      *lasagne.layers.get_all_param_values(generator))
-            np.savez('models/{}_{}_crit_{}_{}.npz'.format(loss_type, data_type, name, epoch),
+            np.savez('{}/models/crit_{}.npz'.format(trial_path, epoch),
                      *lasagne.layers.get_all_param_values(critic))
 
 if __name__ == '__main__':
@@ -484,9 +506,14 @@ if __name__ == '__main__':
                         help="Save model every?")
 
     args = parser.parse_args()
+
+    # create folder structure and get target folder
+    trial_path = create_folder_structure(args.datatype, args.loss_type)
+    # save args as pkl file
+    pkl.dump(args, open("{}/args.pkl".format(trial_path), "wb"))
     print(args)
     main(args.datatype, args.critic, args.generator, args.n_epochs,
          args.epoch_size, args.bs, args.clr, args.glr, args.clip,
          args.noise_size, args.boolean, args.condition, args.cbn, args.gbn,
-         args.c_iters, args.cl_iters, args.loss_type, args.name,
-         args.cl_freq, args.decay, args.save_model_every)
+         args.c_iters, args.cl_iters, args.loss_type, args.cl_freq, args.decay,
+         args.save_model_every, trial_path)
