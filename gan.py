@@ -34,8 +34,6 @@ from data_processing import (
 from text_utils import textEncoder
 import pdb
 
-# add (real, fake) pair as input
-
 
 def iterate_minibatches_proll(inputs, labels, batch_size, shuffle=True,
                               forever=True, length=128):
@@ -142,7 +140,6 @@ def build_functions(critic, generator, clip, batch_size, input_var, noise_var,
     else:
         noise = srng.normal((batch_size, noise_size))
     if loss_type == 'iwgan':
-        # alpha = np.random.uniform(0, 1, (batch_size, 1, 1))
         alpha = srng.uniform((batch_size, 1, 1, 1), low=0., high=1.)
 
     # prepare symbolic input variables given condition
@@ -185,12 +182,15 @@ def build_functions(critic, generator, clip, batch_size, input_var, noise_var,
     generator_penalty = T.sum(T.zeros((1,)))
 
     if loss_type == 'iwgan':
-        LAMBDA = 10
+        LAMBDA = 1
         differences = fake_in - input_var
         interpolates = input_var + (alpha*differences)
-        gradients = theano.grad(
-            lasagne.layers.get_output(critic, interpolates).sum(),
-            wrt=interpolates)
+        if cond_var:
+            inter_out = lasagne.layers.get_output(
+                critic, inputs={d_in_layer:interpolates, d_cond_layer:cond_var})
+        else:
+            inter_out = lasagne.layers.get_output(critic, interpolates)
+        gradients = theano.grad(inter_out.sum(), wrt=interpolates)
         slopes = T.sqrt(T.sum(T.sqr(gradients), axis=(1, 2, 3)))
         critic_penalty = -(LAMBDA * T.mean((slopes-1.)**2))
 
@@ -388,7 +388,7 @@ def main(data_type, c_arch, g_arch, num_epochs, epoch_size, batch_size,
         critic_scores = []
         generator_scores = []
         for _ in tqdm(range(epoch_size)):
-            if (generator_iterations < 25) or (generator_iterations % cl_freq== 0):
+            if (generator_iterations < 25) or (generator_iterations % cl_freq) == 0:
                 critic_runs = cl_iters
             else:
                 critic_runs = c_iters
