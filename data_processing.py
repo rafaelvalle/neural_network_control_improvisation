@@ -119,3 +119,28 @@ def load_proll_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
         return np.array(data), np.array(labels)
 
     return data
+
+
+def postprocess_proll(proll, threshold, argmax, boolean):
+    if threshold < proll.max():
+        proll[proll < threshold] = -1
+    if argmax:
+        z = np.zeros(proll.shape) - 1
+        max_per_col = np.argmax(proll, axis=0)
+        z[max_per_col, np.arange(proll.shape[1])] = (
+            proll[max_per_col, np.arange(proll.shape[1])])
+        proll = z
+    proll += abs(proll.min())
+    if proll.max() != 0:
+        proll /= proll.max()
+    if boolean:
+        proll = (proll > 0).astype(int)
+    proll *= 127
+    proll = proll.astype(int)
+    return proll
+
+
+def offset_proll(proll, offset):
+    score = np.zeros((128, proll.shape[1])) - 1
+    score[offset:offset+proll.shape[0]] = proll
+    return score
