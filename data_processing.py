@@ -28,7 +28,7 @@ def iterate_minibatches_proll(inputs, labels, batch_size, shuffle=True,
             else:
                 data = inputs[excerpt]
 
-            yield lasagne.utils.floatX(np.array(data)), labels[excerpt]
+            yield np.array(data).astype(np.float32), labels[excerpt]
 
         if not forever:
             break
@@ -93,7 +93,7 @@ def iterate_minibatches_text(inputs, labels, batch_size, encoder, shuffle=True,
             data += data.min()
             data /= data.max()
             data = (data * 2) - 1
-            yield lasagne.utils.floatX(data), labels[excerpt]
+            yield data.astype(np.float32), labels[excerpt]
 
         if not forever:
             break
@@ -187,7 +187,7 @@ def load_proll_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
         for filepath in filepaths:
             cur_data = np.load(filepath)
             if crop is not None:
-                cur_data = cur_data[:, crop[0]:crop[1]]
+                cur_data = cur_data[crop[0]:crop[1], :]
             if scale:
                 # scale each frame [-1, 1]
                 cur_data += cur_data.min(axis=1)[:, None]
@@ -204,11 +204,14 @@ def load_proll_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
                     labels.extend([composer] * len(cur_data))
                 else:
                     data.append(cur_data)
-                    labels.extend(composer)
+                    labels.append(composer)
             else:
                 data[composer].append(cur_data)
     if not as_dict:
-        return np.array(data), np.array(labels)
+        if patch_size:
+            return np.array(data), np.array(labels)
+        else:
+            return data, np.array(labels)
 
     return data
 
