@@ -3,10 +3,12 @@
 import argparse
 import numpy as np
 from music_utils import pianoroll_to_midi
+from data_processing import postprocess_proll, offset_proll
 import glob2 as glob
 
 
-def convert(globstr, fs, program, threshold, samples, boolean, argmax):
+def convert(globstr, fs, program, threshold, samples, boolean, argmax,
+            offset):
     for filepath in glob.glob(globstr):
         prolls = np.load(filepath)
         print('{}, {}'.format(filepath, prolls.shape))
@@ -17,21 +19,8 @@ def convert(globstr, fs, program, threshold, samples, boolean, argmax):
             proll = prolls[i]
             if len(proll.shape) == 3:
                 proll = proll[0]
-            if threshold < proll.max():
-                proll[proll < threshold] = -1
-            if argmax:
-                z = np.zeros(proll.shape) - 1
-                max_per_col = np.argmax(proll, axis=0)
-                z[max_per_col, np.arange(proll.shape[1])] = (
-                    proll[max_per_col, np.arange(proll.shape[1])])
-                proll = z
-            proll += abs(proll.min())
-            if proll.max() != 0:
-                proll /= proll.max()
-            if boolean:
-                proll = (proll > 0).astype(int)
-            proll *= 127
-            proll = proll.astype(int)
+            proll = offset_proll(proll, offset)
+            postprocess_proll(proll, threshold, argmax, boolean)
             pianoroll_to_midi(
                 proll, fs, program, filepath=filepath+'{}.midi'.format(i))
 
@@ -52,8 +41,10 @@ if __name__ == '__main__':
                         help="Ignore velocity")
     parser.add_argument("-m", "--argmax", type=int, default=0,
                         help="Argmax per timestep")
+    parser.add_argument("-o", "--offset", type=int, default=0,
+                        help="Piano roll pitch offset to start")
 
     args = parser.parse_args()
     print(args)
     convert(args.globstr, args.fs, args.program, args.threshold, args.samples,
-            args.boolean, args.argmax)
+            args.boolean, args.argmax, args.offset)
