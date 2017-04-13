@@ -6,6 +6,98 @@ import pandas as pd
 import glob2 as glob
 import pdb
 
+def iterate_minibatches_proll(inputs, labels, batch_size, shuffle=True,
+                              forever=True, length=128):
+    if shuffle:
+        indices = np.arange(len(inputs))
+    while True:
+        if shuffle:
+            np.random.shuffle(indices)
+        for start_idx in range(0, len(inputs) - batch_size + 1, batch_size):
+            if shuffle:
+                excerpt = indices[start_idx:start_idx + batch_size]
+            else:
+                excerpt = slice(start_idx, start_idx + batch_size)
+            if length > 0:
+                data = []
+                # select random slice from each piano roll
+                for i in excerpt:
+                    rand_start = np.random.randint(
+                        0, inputs[i].shape[1] - length)
+                    data.append(inputs[i][:, rand_start:rand_start+length])
+            else:
+                data = inputs[excerpt]
+
+            yield lasagne.utils.floatX(np.array(data)), labels[excerpt]
+
+        if not forever:
+            break
+
+
+def iterate_minibatches_text(inputs, labels, batch_size, encoder, shuffle=True,
+                             forever=True, length=128, alphabet_size=128,
+                             padding=None):
+    from text_utils import binarizeText
+    if shuffle:
+        indices = np.arange(len(inputs))
+    while True:
+        if shuffle:
+            np.random.shuffle(indices)
+        for start_idx in range(0, len(inputs) - batch_size + 1, batch_size):
+            if shuffle:
+                excerpt = indices[start_idx:start_idx + batch_size]
+            else:
+                excerpt = slice(start_idx, start_idx + batch_size)
+
+            data = []
+            # select random slice from each piano roll
+            for i in excerpt:
+                cur_data = binarizeText(
+                    inputs[i], encoder, lower_case=True, remove_html=False)
+                if cur_data.shape[1] < length:
+                    if padding is None:
+                        # ignore examples shorter than length
+                        continue
+                    elif padding == 'zero':
+                        # zero pad data if shorter than length
+                        z = np.zeros((alphabet_size, length))
+                        z[:, :cur_data.shape[1]] = cur_data
+                    elif padding == 'noise':
+                        z = np.zeros((alphabet_size, length))
+                        z[:, :cur_data.shape[1]] = cur_data
+                        z[:, cur_data.shape[1]:] = np.random.normal(
+                            0, 0.0001,
+                            (cur_data.shape[0], length - cur_data.shape[1]))
+                    elif padding == 'repeat':
+                        z = np.zeros((alphabet_size, length))
+                        z[:, :cur_data.shape[1]] = cur_data
+                        # change to vector operation
+                        for k in range(1, length - cur_data.shape[1]-1):
+                            z[:, cur_data.shape[1] + k] = cur_data[
+                                :, (k-1) % cur_data.shape[1]]
+                    else:
+                        raise Exception(
+                            "Padding {} not supported".format(padding))
+                    cur_data = z
+                    data.append(cur_data)
+                elif cur_data.shape[1] > length:
+                    # slice data if larger than length
+                    rand_start = np.random.randint(
+                        0, cur_data.shape[1] - length)
+                    cur_data = cur_data[:, rand_start:rand_start+length]
+                    data.append(cur_data)
+                else:
+                    data.append(cur_data)
+            # scale to [-1, 1]
+            data = np.array(data)
+            data += data.min()
+            data /= data.max()
+            data = (data * 2) - 1
+            yield lasagne.utils.floatX(data), labels[excerpt]
+
+        if not forever:
+            break
+
 
 def create_folder_structure(data_type, loss_type):
     if not os.path.exists(data_type):
