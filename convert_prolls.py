@@ -10,23 +10,26 @@ def convert(globstr, fs, program, threshold, samples, boolean, argmax):
     for filepath in glob.glob(globstr):
         prolls = np.load(filepath)
         print('{}, {}'.format(filepath, prolls.shape))
+        if len(prolls.shape) == 2:
+            prolls = prolls.reshape((1,) + prolls.shape)
+
         for i in range(min(samples, len(prolls))):
             proll = prolls[i]
             if len(proll.shape) == 3:
                 proll = proll[0]
-                if threshold < proll.max():
-                    proll[proll < threshold] = -1
-                if argmax:
-                    z = np.zeros(proll.shape) - 1
-                    max_per_col = np.argmax(proll, axis=0)
-                    z[max_per_col, np.arange(proll.shape[1])] = (
-                        proll[max_per_col, np.arange(proll.shape[1])])
-                    proll = z
-                proll += abs(proll.min())
-                if proll.max() != 0:
-                    proll /= proll.max()
-                if boolean:
-                    proll = (proll > 0).astype(int)
+            if threshold < proll.max():
+                proll[proll < threshold] = -1
+            if argmax:
+                z = np.zeros(proll.shape) - 1
+                max_per_col = np.argmax(proll, axis=0)
+                z[max_per_col, np.arange(proll.shape[1])] = (
+                    proll[max_per_col, np.arange(proll.shape[1])])
+                proll = z
+            proll += abs(proll.min())
+            if proll.max() != 0:
+                proll /= proll.max()
+            if boolean:
+                proll = (proll > 0).astype(int)
             proll *= 127
             proll = proll.astype(int)
             pianoroll_to_midi(
