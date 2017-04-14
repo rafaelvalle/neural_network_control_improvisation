@@ -27,7 +27,6 @@ def iterate_minibatches_proll(inputs, labels, batch_size, shuffle=True,
                     data.append(inputs[i][:, rand_start:rand_start+length])
             else:
                 data = inputs[excerpt]
-
             yield np.array(data).astype(np.float32), labels[excerpt]
 
         if not forever:
