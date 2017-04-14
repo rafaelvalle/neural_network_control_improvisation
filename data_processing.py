@@ -189,8 +189,11 @@ def load_proll_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
                 cur_data = cur_data[crop[0]:crop[1], :]
             if scale:
                 # scale each frame [-1, 1]
-                cur_data += cur_data.min(axis=1)[:, None]
-                cur_data /= cur_data.max(axis=1)[:, None]
+                #cur_data += cur_data.min(axis=1)[:, None]
+                #cur_data /= cur_data.max(axis=1)[:, None]
+                # global scaling
+                cur_data += cur_data.min()
+                cur_data = cur_data / float(cur_data.max())
                 cur_data = np.nan_to_num(cur_data)
                 cur_data = cur_data * 2 - 1
             if patch_size:
