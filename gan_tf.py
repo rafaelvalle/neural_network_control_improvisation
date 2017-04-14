@@ -478,7 +478,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
     def generate_image(iteration):
         samples = session.run(all_fixed_noise_samples)
         samples = ((samples+1.)*(255.99/2)).astype('int32')
-        lib.save_images.save_images(samples.reshape((BATCH_SIZE, N_CHANNELS, 64, 64)),
+        lib.save_images.save_images(np.flipud(samples.reshape((BATCH_SIZE, N_CHANNELS, 64, 64))),
                                     'proll/iwgan/gan_tf_resnet/samples_{}.png'.format(iteration))
 
     # load data
@@ -492,8 +492,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
     i_len = 64
     patch_size = False
     inputs, labels = load_proll_data(
-        datapath, glob_file_str, n_pieces, crop, as_dict,
-        patch_size=patch_size)
+        datapath, glob_file_str, n_pieces, crop, as_dict, patch_size=patch_size)
     labels = np.array(labels)
     iterator = iterate_minibatches_proll
     # shuffle data
@@ -521,7 +520,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
     _x = _x.reshape((BATCH_SIZE, N_CHANNELS, alphabet_size, i_len))
     _x_r = session.run(real_data, feed_dict={real_data_conv: _x})
     _x_r = ((_x_r+1.)*(255.99/2)).astype('int32')
-    lib.save_images.save_images(_x_r.reshape((BATCH_SIZE, N_CHANNELS, 64, 64)),
+    lib.save_images.save_images(np.flipud(_x_r.reshape((BATCH_SIZE, N_CHANNELS, 64, 64))),
                                 'proll/iwgan/gan_tf_resnet/samples_groundtruth.png')
 
     # Train loop
