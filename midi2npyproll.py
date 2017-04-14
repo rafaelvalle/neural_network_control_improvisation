@@ -1,5 +1,8 @@
 #!/usr/bin/python
 
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pylab as plt
 import argparse
 import sys
 import glob2 as glob
@@ -8,7 +11,7 @@ import pretty_midi as pm
 from music_utils import quantize, interpolate_between_beats
 
 
-def main(globstr, beat_subdivisions):
+def main(globstr, beat_subdivisions, save_img):
     for filepath in glob.glob(globstr):
         try:
             d = pm.PrettyMIDI(filepath)
@@ -23,6 +26,9 @@ def main(globstr, beat_subdivisions):
                 print("{} had NaN cells".format(filepath))
             # automatically appends .npy fo filename
             np.save(filepath, proll)
+            # save image
+            if save_img:
+                plt.imsave(filepath+'.png', np.flipud(proll))
         except:
             print filepath, sys.exc_info()[0]
             continue
@@ -37,6 +43,10 @@ if __name__ == '__main__':
         "-b", "--beat_subdivisions", type=int, default=12,
         help="Number of subdivisions per beat")
 
+    parser.add_argument(
+        "-s", "--save_img", type=int, default=0,
+        help="Save pianoroll image")
+
     args = parser.parse_args()
     print(args)
-    main(args.globstr, args.beat_subdivisions)
+    main(args.globstr, args.beat_subdivisions, args.save_img)
