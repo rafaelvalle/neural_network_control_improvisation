@@ -6,7 +6,6 @@ import glob2 as glob
 import numpy as np
 import pretty_midi as pm
 from music_utils import quantize, interpolate_between_beats
-import pdb
 
 
 def main(globstr, beat_subdivisions):
@@ -20,8 +19,8 @@ def main(globstr, beat_subdivisions):
             fs = 1./beats[1]
             # p = d.get_piano_roll(fs=fs, times=beats)
             proll = d.get_piano_roll(fs=fs).astype(int)
-            if numpy.isnan(proll).any():
-                print("{} had NaN cells".format(filepath)
+            if np.isnan(proll).any():
+                print("{} had NaN cells".format(filepath))
             # automatically appends .npy fo filename
             np.save(filepath, proll)
         except:
