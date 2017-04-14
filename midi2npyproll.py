@@ -11,17 +11,20 @@ import pretty_midi as pm
 from music_utils import quantize, interpolate_between_beats
 
 
-def main(globstr, beat_subdivisions, save_img):
+def main(globstr, beat_subdivisions, fs, save_img):
     for filepath in glob.glob(globstr):
         try:
-            d = pm.PrettyMIDI(filepath)
-            b = d.get_beats()
+            data = pm.PrettyMIDI(filepath)
+            b = data.get_beats()
             beats = interpolate_between_beats(b, beat_subdivisions)
-            quantize(d, beats)
-            # fs = min(int(np.floor(1./beats[1]))+1, 20)
-            fs = 1./beats[1]
-            # p = d.get_piano_roll(fs=fs, times=beats)
-            proll = d.get_piano_roll(fs=fs).astype(int)
+            if not fs:
+                cur_fs = 1./beats[1]
+            else:
+                cur_fs = fs
+            print("{}, {}".format(filepath, cur_fs))
+            quantize(data, beats)
+            # p = data.get_piano_roll(fs=fs, times=beats)
+            proll = data.get_piano_roll(fs=cur_fs).astype(int)
             if np.isnan(proll).any():
                 print("{} had NaN cells".format(filepath))
             # automatically appends .npy fo filename
@@ -29,6 +32,7 @@ def main(globstr, beat_subdivisions, save_img):
             # save image
             if save_img:
                 plt.imsave(filepath+'.png', np.flipud(proll))
+            fs = 0
         except:
             print filepath, sys.exc_info()[0]
             continue
@@ -42,11 +46,13 @@ if __name__ == '__main__':
     parser.add_argument(
         "-b", "--beat_subdivisions", type=int, default=12,
         help="Number of subdivisions per beat")
-
+    parser.add_argument(
+        "-f", "--fs", type=int, default=0,
+        help="Sampling rate per second")
     parser.add_argument(
         "-s", "--save_img", type=int, default=0,
         help="Save pianoroll image")
 
     args = parser.parse_args()
     print(args)
-    main(args.globstr, args.beat_subdivisions, args.save_img)
+    main(args.globstr, args.beat_subdivisions, args.fs, args.save_img)
