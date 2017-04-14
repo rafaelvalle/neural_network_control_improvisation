@@ -6,7 +6,6 @@ import glob2 as glob
 import numpy as np
 import pretty_midi as pm
 from music_utils import quantize, interpolate_between_beats
-import pdb
 
 
 def main(globstr, beat_subdivisions):
@@ -16,11 +15,12 @@ def main(globstr, beat_subdivisions):
             b = d.get_beats()
             beats = interpolate_between_beats(b, beat_subdivisions)
             quantize(d, beats)
-            fs = min(int(np.ceil(1./beats[1])), 20)
-            p = d.get_piano_roll(fs=fs, times=beats)
-            pdb.set_trace()
-            # automatically appends .npy fo file
-            np.save(filepath, p)
+            # fs = min(int(np.floor(1./beats[1]))+1, 20)
+            fs = 1./beats[1]
+            # p = d.get_piano_roll(fs=fs, times=beats)
+            proll = d.get_piano_roll(fs=fs)
+            # automatically appends .npy fo filename
+            np.save(filepath, proll)
         except:
             print filepath, sys.exc_info()[0]
             continue
