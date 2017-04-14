@@ -7,8 +7,9 @@ from music_utils import pianoroll_to_midi
 from data_processing import postprocess_proll, offset_proll
 import pdb
 
+
 def main(filepath, shape, fs, program, threshold, boolean, argmax,
-         offset):
+         offset, flip):
     shape = np.array(shape.split(' '), dtype=np.float32)
     img = imread(filepath, flatten=True)
     n_rows = img.shape[0] / shape[0]
@@ -17,6 +18,8 @@ def main(filepath, shape, fs, program, threshold, boolean, argmax,
     i = 0
     for col_imgs in np.split(img, n_cols, axis=0):
         for proll in np.split(col_imgs, n_rows, axis=1):
+            if flip:
+                proll = np.flipud(proll)
             proll = proll / proll.max()
             proll = (proll * 2) - 1
             proll = offset_proll(proll, offset)
@@ -42,8 +45,10 @@ if __name__ == '__main__':
                         help="Argmax per timestep")
     parser.add_argument("-o", "--offset", type=int, default=0,
                         help="Offset of piano roll lowest note")
+    parser.add_argument("-f", "--flip", type=int, default=1,
+                        help="Flip the image vertically before converting")
 
     args = parser.parse_args()
     print(args)
     main(args.filepath, args.shape, args.fs, args.program, args.threshold,
-         args.boolean, args.argmax, args.offset)
+         args.boolean, args.argmax, args.offset, args.flip)
