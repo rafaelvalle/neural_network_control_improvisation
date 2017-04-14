@@ -1,8 +1,8 @@
 #!/usr/bin/python
-
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pylab as plt
+import traceback
 import argparse
 import sys
 import glob2 as glob
@@ -10,7 +10,7 @@ import numpy as np
 import pretty_midi as pm
 from music_utils import quantize, interpolate_between_beats
 
-def main(globstr, beat_subdivisions, fs, quantized, wrap, save_img):
+def main(globstr, beat_subdivisions, fs, quantized, wrap, save_img, debug):
     for filepath in glob.glob(globstr):
         try:
             data = pm.PrettyMIDI(filepath)
@@ -36,6 +36,8 @@ def main(globstr, beat_subdivisions, fs, quantized, wrap, save_img):
                 plt.imsave(filepath+'.png', np.flipud(proll))
         except:
             print filepath, sys.exc_info()[0]
+            if debug:
+                traceback.print_exc()
             continue
 
 
@@ -59,8 +61,11 @@ if __name__ == '__main__':
     parser.add_argument(
         "-w", "--wrap", type=int, default=20,
         help="Recursively wrap to half fs while larger than wrap value")
+    parser.add_argument(
+        "-d", "--debug", type=int, default=0,
+        help="Print traceback for finding corrupt files")
 
     args = parser.parse_args()
     print(args)
     main(args.globstr, args.beat_subdivisions, args.fs, args.quantized,
-         args.wrap, args.save_img)
+         args.wrap, args.save_img, args.debug)
