@@ -1,7 +1,6 @@
 from __future__ import division
 import numpy as np
 import pretty_midi as pm
-import pdb
 
 
 def interpolate_between_beats(beats, n_steps):
@@ -25,6 +24,9 @@ def quantize(data, times):
                 note.end = times[k-1]
             else:
                 note.end = times[k]
+            # note length must be at least minimum length
+            if note.start == note.end and k < len(times):
+                note.start = times[k+1]
 
 
 def pianoroll_to_midi(pianoroll, fs, program=1, filepath='midifile.mid',
