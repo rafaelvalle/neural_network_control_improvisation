@@ -9,7 +9,6 @@ import glob2 as glob
 import numpy as np
 import pretty_midi as pm
 from music_utils import quantize, interpolate_between_beats
-import pdb
 
 def main(globstr, beat_subdivisions, fs, save_img):
     for filepath in glob.glob(globstr):
@@ -17,12 +16,12 @@ def main(globstr, beat_subdivisions, fs, save_img):
             data = pm.PrettyMIDI(filepath)
             b = data.get_beats()
             beats = interpolate_between_beats(b, beat_subdivisions)
+            quantize(data, beats)
             if not fs:
                 cur_fs = 1./beats[1]
             else:
                 cur_fs = fs
             print("{}, {}".format(filepath, cur_fs))
-            quantize(data, beats)
             # p = data.get_piano_roll(fs=fs, times=beats)
             proll = data.get_piano_roll(fs=cur_fs).astype(int)
             if np.isnan(proll).any():
