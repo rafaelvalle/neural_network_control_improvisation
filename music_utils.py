@@ -53,7 +53,9 @@ def pianoroll_to_midi(pianoroll, fs, program=1, filepath='midifile.mid',
 
             # find where note ends
             end = start + 1
-            while end < pianoroll.shape[1] and pianoroll[note, end] > 0:
+            while all((end < pianoroll.shape[1], 
+                pianoroll[note, end] > 0, 
+                pianoroll[note, end-1] == pianoroll[note, end])):
                 end += 1
 
             # add note to instrument
