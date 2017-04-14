@@ -350,9 +350,9 @@ def main(data_type, c_arch, g_arch, num_epochs, epoch_size, batch_size,
         else:
             samples = g_gen_fn(fixed_noise)
         plt.imsave('{}/images/gits_{}.png'.format(trial_path, epoch),
-                   (samples.reshape(12, 12, alphabet_size, n_steps)
+                   np.flipud((samples.reshape(12, 12, alphabet_size, n_steps)
                            .transpose(0, 2, 1, 3)
-                           .reshape(12*alphabet_size, 12*n_steps)),
+                           .reshape(12*alphabet_size, 12*n_steps))),
                    cmap='bwr')
         np.save('{}/samples/gits_{}.npy'.format(trial_path, epoch), samples)
 
