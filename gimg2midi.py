@@ -18,6 +18,7 @@ def main(filepath, shape, fs, program, threshold, boolean, argmax,
     for col_imgs in np.split(img, n_cols, axis=0):
         for proll in np.split(col_imgs, n_rows, axis=1):
             proll = proll / proll.max()
+            proll = (proll * 2) - 1
             proll = offset_proll(proll, offset)
             proll = postprocess_proll(proll, threshold, argmax, boolean)
             pianoroll_to_midi(
