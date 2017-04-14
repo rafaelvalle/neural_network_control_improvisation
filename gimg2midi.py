@@ -45,7 +45,7 @@ if __name__ == '__main__':
                         help="Argmax per timestep")
     parser.add_argument("-o", "--offset", type=int, default=0,
                         help="Offset of piano roll lowest note")
-    parser.add_argument("-f", "--flip", type=int, default=1,
+    parser.add_argument("-f", "--flip", type=int, default=0,
                         help="Flip the image vertically before converting")
 
     args = parser.parse_args()
