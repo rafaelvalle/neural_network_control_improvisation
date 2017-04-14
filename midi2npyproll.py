@@ -10,19 +10,22 @@ import numpy as np
 import pretty_midi as pm
 from music_utils import quantize, interpolate_between_beats
 
-def main(globstr, beat_subdivisions, fs, save_img):
+def main(globstr, beat_subdivisions, fs, quantized, wrap, save_img):
     for filepath in glob.glob(globstr):
         try:
             data = pm.PrettyMIDI(filepath)
             b = data.get_beats()
             beats = interpolate_between_beats(b, beat_subdivisions)
-            quantize(data, beats)
+            if quantized:
+                quantize(data, beats)
             if not fs:
                 cur_fs = 1./beats[1]
+                while cur_fs > wrap:
+                    cur_fs = cur_fs * 0.5
             else:
                 cur_fs = fs
             print("{}, {}".format(filepath, cur_fs))
-            # p = data.get_piano_roll(fs=fs, times=beats)
+            # proll = data.get_piano_roll(fs=fs, times=beats)
             proll = data.get_piano_roll(fs=cur_fs).astype(int)
             if np.isnan(proll).any():
                 print("{} had NaN cells".format(filepath))
@@ -48,9 +51,16 @@ if __name__ == '__main__':
         "-f", "--fs", type=int, default=0,
         help="Sampling rate per second")
     parser.add_argument(
+        "-q", "--quantized", type=int, default=0,
+        help="Quantize to beat times and subdivisions")
+    parser.add_argument(
         "-s", "--save_img", type=int, default=0,
         help="Save pianoroll image")
+    parser.add_argument(
+        "-w", "--wrap", type=int, default=20,
+        help="Recursively wrap to half fs while larger than wrap value")
 
     args = parser.parse_args()
     print(args)
-    main(args.globstr, args.beat_subdivisions, args.fs, args.save_img)
+    main(args.globstr, args.beat_subdivisions, args.fs, args.quantized,
+         args.wrap, args.save_img)
