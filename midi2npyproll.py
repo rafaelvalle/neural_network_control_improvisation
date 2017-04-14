@@ -9,7 +9,7 @@ import glob2 as glob
 import numpy as np
 import pretty_midi as pm
 from music_utils import quantize, interpolate_between_beats
-
+import pdb
 
 def main(globstr, beat_subdivisions, fs, save_img):
     for filepath in glob.glob(globstr):
@@ -32,7 +32,6 @@ def main(globstr, beat_subdivisions, fs, save_img):
             # save image
             if save_img:
                 plt.imsave(filepath+'.png', np.flipud(proll))
-            fs = 0
         except:
             print filepath, sys.exc_info()[0]
             continue
