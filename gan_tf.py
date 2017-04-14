@@ -492,8 +492,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
     i_len = 64
     patch_size = False
     inputs, labels = load_proll_data(
-        datapath, glob_file_str, n_pieces, crop, as_dict,
-        patch_size=patch_size)
+        datapath, glob_file_str, n_pieces, crop, as_dict, patch_size=patch_size)
     labels = np.array(labels)
     iterator = iterate_minibatches_proll
     # shuffle data
