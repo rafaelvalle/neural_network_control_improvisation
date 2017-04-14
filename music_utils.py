@@ -37,6 +37,7 @@ def pianoroll_to_midi(pianoroll, fs, program=1, filepath='midifile.mid',
     instrument = pm.Instrument(program=program)
     # scale piano roll to [0, 127]
     if scale:
+        pianoroll -= pianoroll.min()
         pianoroll = 127*(pianoroll / pianoroll.max())
         pianoroll = pianoroll.astype(int)
     # cumbersomely slow, refactor
