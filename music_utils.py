@@ -30,7 +30,14 @@ def quantize(data, times):
 
 
 def pianoroll_to_midi(pianoroll, fs, program=1, filepath='midifile.mid',
-                      scale=True):
+                      scale=True, threshold=0):
+
+    def isNoteEnd(pianoroll, note, end, threshold=np.inf):
+        if end < pianoroll.shape[1] and pianoroll[note, end] > 0:
+            if abs(pianoroll[note, end-1] - pianoroll[note, end]) <= threshold:
+                return False
+        return True
+
     # create PrettyMIDI object
     midifile = pm.PrettyMIDI(resolution=fs, initial_tempo=60 / (4.0/fs))
     # create Instrument instance
@@ -53,9 +60,9 @@ def pianoroll_to_midi(pianoroll, fs, program=1, filepath='midifile.mid',
             if start == pianoroll.shape[1]:
                 break
 
-            # find where note ends
             end = start + 1
-            while end < pianoroll.shape[1] and pianoroll[note, end] > 0 and pianoroll[note, end-1] == pianoroll[note, end]:
+            # find where note ends
+            while not isNoteEnd(pianoroll, note, end, threshold):
                 end += 1
 
             # add note to instrument
