@@ -444,7 +444,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
         clip_disc_weights = tf.group(*clip_ops)
 
     elif MODE == 'wgan-gp':
-        gen_train_op = tf.train.AdamOptimizer(learning_rate=5e-4, beta1=0.5, beta2=0.9).minimize(gen_cost,
+        gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-3, beta1=0.5, beta2=0.9).minimize(gen_cost,
                                           var_list=lib.params_with_name('Generator'), colocate_gradients_with_ops=True)
         disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(disc_cost,
                                            var_list=lib.params_with_name('Discriminator.'), colocate_gradients_with_ops=True)
@@ -482,7 +482,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
                                     'proll/iwgan/gan_tf_resnet/samples_{}.png'.format(iteration))
 
     # load data
-    datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Chorales'
+    datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Piano'
     glob_file_str = '*.npy'
     n_pieces = 0  # 0 is equal to all pieces, unbalanced dataset
     crop = (32, 96)
@@ -525,10 +525,8 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
 
     # Train loop
     print("Initializing all variables")
-    session.run(tf.initialize_all_variables())
+    session.run(tf.global_variables_initializer())
     for iteration in range(ITERS):
-        # print("iteration {}".format(iteration))
-
         start_time = time.time()
 
         # Train generator
@@ -540,13 +538,13 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
             disc_iters = 1
         else:
             disc_iters = CRITIC_ITERS
+
         for i in range(disc_iters):
             _data, _ = train_gen.next()
             _data = _data.reshape((BATCH_SIZE, N_CHANNELS, alphabet_size, i_len))
             _disc_cost, _ = session.run([disc_cost, disc_train_op], feed_dict={all_real_data_conv: _data})
             if MODE == 'wgan':
                 _ = session.run([clip_disc_weights])
-
         lib.plot.plot('train disc cost', _disc_cost)
         lib.plot.plot('time', time.time() - start_time)
 
