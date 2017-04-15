@@ -33,7 +33,8 @@ def main(globstr, beat_subdivisions, fs, quantized, wrap, save_img, debug):
             np.save(filepath, proll)
             # save image
             if save_img:
-                plt.imsave(filepath+'.png', np.flipud(proll))
+                plt.imsave(filepath+'_o.png', proll)
+                plt.imsave(filepath+'_f.png', np.flipud(proll))
         except:
             print filepath, sys.exc_info()[0]
             if debug:

@@ -479,7 +479,9 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
         samples = session.run(all_fixed_noise_samples)
         samples = ((samples+1.)*(255.99/2)).astype('int32')
         lib.save_images.save_images(np.flipud(samples.reshape((BATCH_SIZE, N_CHANNELS, 64, 64))),
-                                    'proll/iwgan/gan_tf_resnet/samples_{}.png'.format(iteration))
+                                    'proll/iwgan/gan_tf_resnet/samples_{}_f.png'.format(iteration))
+        lib.save_images.save_images(samples.reshape((BATCH_SIZE, N_CHANNELS, 64, 64)),
+                                    'proll/iwgan/gan_tf_resnet/samples_{}_o.png'.format(iteration))
 
     # load data
     datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Piano'
@@ -493,6 +495,8 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
     patch_size = False
     inputs, labels = load_proll_data(
         datapath, glob_file_str, n_pieces, crop, as_dict, patch_size=patch_size)
+    if len(inputs) == 0:
+        raise Exception("No inputs")
     labels = np.array(labels)
     iterator = iterate_minibatches_proll
     # shuffle data
@@ -516,6 +520,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
     # Save a batch of ground-truth samples
     # _x = inf_train_gen().next()
     """
+    pdb.set_trace()
     _x, _ = train_gen.next()
     _x = _x.reshape((BATCH_SIZE, N_CHANNELS, alphabet_size, i_len))
     _x_r = session.run(real_data, feed_dict={real_data_conv: _x})

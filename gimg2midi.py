@@ -9,15 +9,15 @@ import pdb
 
 
 def main(filepath, shape, fs, program, threshold, boolean, argmax,
-         offset, flip):
+         offset, flip, concat):
     shape = np.array(shape.split(' '), dtype=np.float32)
     img = imread(filepath, flatten=True)
-    n_rows = img.shape[0] / shape[0]
-    n_cols = img.shape[1] / shape[1]
+    n_rows = int(img.shape[0] / shape[0])
+    n_cols = int(img.shape[1] / shape[1])
 
     i = 0
-    for col_imgs in np.split(img, n_cols, axis=0):
-        for proll in np.split(col_imgs, n_rows, axis=1):
+    for row_imgs in np.split(img, n_rows, axis=0):
+        for proll in np.split(row_imgs, n_cols, axis=1):
             if flip:
                 proll = np.flipud(proll)
             proll = proll / proll.max()
@@ -25,7 +25,8 @@ def main(filepath, shape, fs, program, threshold, boolean, argmax,
             proll = offset_proll(proll, offset)
             proll = postprocess_proll(proll, threshold, argmax, boolean)
             pianoroll_to_midi(
-                proll, fs, program, filepath=filepath+'{}.midi'.format(i))
+                proll, fs, program, filepath=filepath+'{}.midi'.format(i),
+                threshold=concat)
             i += 1
 
 if __name__ == '__main__':
@@ -47,8 +48,10 @@ if __name__ == '__main__':
                         help="Offset of piano roll lowest note")
     parser.add_argument("-f", "--flip", type=int, default=0,
                         help="Flip the image vertically before converting")
+    parser.add_argument("-c", "--concat", type=int, default=np.inf,
+                        help="Threshold for merging")
 
     args = parser.parse_args()
     print(args)
     main(args.filepath, args.shape, args.fs, args.program, args.threshold,
-         args.boolean, args.argmax, args.offset, args.flip)
+         args.boolean, args.argmax, args.offset, args.flip, args.concat)
