@@ -25,7 +25,11 @@ train_gen = iterator(inputs, labels, BATCH_SIZE, shuffle=True, length=i_len,
                      forever=True)
 for i in range(10):
     samples, _ = train_gen.next()
-    plt.imsave('real_sample_{}.png'.format(i),
+    plt.imsave('real_sample_{}_o.png'.format(i),
+               (samples.reshape(8, 8, alphabet_size, n_steps)
+                       .transpose(0, 2, 1, 3)
+                       .reshape(8*alphabet_size, 8*n_steps)), cmap='bwr')
+    plt.imsave('real_sample_{}_f.png'.format(i),
                np.flipud((samples.reshape(8, 8, alphabet_size, n_steps)
                          .transpose(0, 2, 1, 3)
                          .reshape(8*alphabet_size, 8*n_steps))), cmap='bwr')
