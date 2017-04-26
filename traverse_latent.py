@@ -8,8 +8,8 @@ import cPickle as pkl
 import numpy as np
 import theano
 import theano.tensor as T
-from lasagne.layers import (get_all_layers, get_all_params, get_output_shape,
-                            set_all_param_values, get_output)
+from lasagne.layers import (
+    get_all_layers, get_output_shape, set_all_param_values, get_output)
 from lasagne.utils import floatX
 
 from models import build_generator
@@ -17,8 +17,8 @@ from models import build_generator
 import pdb
 
 
-def main(trial_folder, model_filename, g_arch, g_batch_norm=1, batch_size=8,
-         n_steps=10):
+def main(trial_folder, model_filepath, batch_size=8, n_steps=10,
+         plot_and_save=True):
 
     def interpolate(x, y, n_steps):
         step_size = 1.0/n_steps
@@ -33,27 +33,56 @@ def main(trial_folder, model_filename, g_arch, g_batch_norm=1, batch_size=8,
     def generate_output(gen_fn, noise, noise_size, cond=[], cond_size=0):
         if len(cond) and cond_size:
             return gen_fn(noise.reshape(1, noise_size),
-                        cond.reshape(1, cond_size))[0, 0]
+                          cond.reshape(1, cond_size))[0, 0]
         else:
             return gen_fn(noise.reshape(1, noise_size))[0, 0]
 
-    def plotting(ax, data):
-            ax.imshow(data, aspect='auto', origin='bottom', cmap='gray')
+    def plotting(ax, data, filepath=''):
+        ax.imshow(data, aspect='auto', origin='bottom', cmap='gray')
+
+    def plotting_and_save(ax, data, filepath):
+        ax.imshow(data, aspect='auto', origin='bottom', cmap='gray')
+        np.save(filepath, data)
+    if plot_and_save:
+        plot_fn = plotting_and_save
+    else:
+        plot_fn = plotting
+
+    with open(os.path.join(trial_folder, 'args.txt'), 'r') as f:
+        args = f.read().replace('\n', '')
+    print(args)
+
+    words = args.split(' ')
+    g_arch = words[2]
+    g_batch_norm = None
+    noise_size = None
+    i = 2
+    while i < len(words) - 1:
+        if words[i] == '--gbn':
+            g_batch_norm = int(words[i+1])
+            i += 2
+        else:
+            i += 1
+
 
     # load blank network and and use saved weights to update network parameters
     network = pkl.load(
         open(os.path.join(trial_folder, 'models/generator_blank.pkl'), "rb"))
 
     # instantiate noise and condition variables
-    noise_var = T.fmatrix('noise')
-    cond_var = T.fmatrix('condition')
     noise_size = get_output_size(network, 'g_in_noise')
     cond_size = get_output_size(network, 'g_in_condition')
+    noise_var = None
+    cond_var = None
+    if noise_size > 0:
+        noise_var = T.fmatrix('noise')
+    if cond_var > 0:
+        cond_var = T.fmatrix('condition')
 
     # create blank network given params
     network = build_generator(
         noise_var, noise_size, cond_var, cond_size, g_arch, g_batch_norm)
-    with np.load(os.path.join(trial_folder, 'models/' + model_filename)) as f:
+    with np.load(model_filepath) as f:
         parameters = [f['arr_%d' % i] for i in range(len(f.files))]
     set_all_param_values(network, parameters)
 
@@ -87,19 +116,23 @@ def main(trial_folder, model_filename, g_arch, g_batch_norm=1, batch_size=8,
             dim = int(np.sqrt(cond_size) + 1)
             fig, axes = plt.subplots(dim, dim, figsize=(16, 32))
             axes = axes.flatten()
-            [plotting(axes[j], generate_output(gen_fn, noise[i], noise_size, cond[j], cond_size))
+            [plot_fn(axes[j],
+                     generate_output(gen_fn, noise[i], noise_size, cond[j], cond_size),
+                     '{}/samples/z_{}_conditioned_{}.npy'.format(trial_folder, i, j))
              for j in range(cond_size)]
             fig.tight_layout()
-            fig.savefig('{}/samples/z_{}_conditioned.png'.format(
+            fig.savefig('{}/images/z_{}_conditioned.png'.format(
                 trial_folder, i))
             plt.close('all')
     else:
         fig, axes = plt.subplots(1, batch_size, figsize=(16, 4))
-        [plotting(axes[i], generate_output(gen_fn, noise[i], noise_size)) for i in range(batch_size)]
+        [plot_fn(axes[i],
+                 generate_output(gen_fn, noise[i], noise_size),
+                 '{}/samples/z_{}.npy'.format(trial_folder, i))
+         for i in range(batch_size)]
         fig.tight_layout()
-        fig.savefig('{}/samples/z.png'.format(trial_folder))
+        fig.savefig('{}/images/z.png'.format(trial_folder))
         plt.close('all')
-
 
     print("Plotting interpolations")
     # plot interpolations, MUST REFACTOR
@@ -126,20 +159,26 @@ def main(trial_folder, model_filename, g_arch, g_batch_norm=1, batch_size=8,
         # fixed condition moving noise
         for i in range(batch_size):
             fig, axes = plt.subplots(batch_size-1, n_steps+1, figsize=(32, 12))
-            [plotting(axes[j, k], generate_output(gen_fn, noise_interp[j][k], noise_size, cond[i], cond_size))
+            [plotting(
+                axes[j, k],
+                generate_output(gen_fn, noise_interp[j][k], noise_size, cond[i], cond_size),
+                '{}/samples/z_{}_inter_{}_cond_{}.npy'.format(trial_folder, j, k, i))
              for j in range(batch_size-1) for k in range(n_steps+1)]
             fig.tight_layout()
             fig.savefig(
-                '{}/samples/z_inter_cond_{}.png'.format(trial_folder, i))
+                '{}/images/z_inter_cond_{}.png'.format(trial_folder, i))
             plt.close('all')
     else:
         # moving noise
         fig, axes = plt.subplots(batch_size-1, n_steps+1, figsize=(32, 12))
-        [plotting(axes[j, k], generate_output(gen_fn, noise_interp[j][k], noise_size))
+        [plot_fn(
+            axes[j, k],
+            generate_output(gen_fn, noise_interp[j][k], noise_size),
+            '{}/samples/z_{}_inter_{}.npy'.format(trial_folder, j, k))
          for j in range(batch_size-1) for k in range(n_steps+1)]
         fig.tight_layout()
         fig.savefig(
-            '{}/samples/z_inter.png'.format(trial_folder))
+            '{}/images/z_inter.png'.format(trial_folder))
         plt.close('all')
 
 if __name__ == '__main__':
@@ -150,13 +189,13 @@ if __name__ == '__main__':
 
     parser.add_argument("trial_folder", type=str,
                         help="Path of trial folder")
-    parser.add_argument("model_filename", type=str,
-                        help="Filename of model in trial_folder")
-    parser.add_argument("g_arch", type=str,
-                        help="Name of generator architechture")
+    parser.add_argument("model_filepath", type=str,
+                        help="Filepath of model")
+    #parser.add_argument("g_arch", type=str, default=1,
+    #                    help="Name of generator architechture")
     parser.add_argument("-b", type=int, default=1,
                         help="Generator has batch norm or not")
 
     args = parser.parse_args()
     print(args)
-    main(args.trial_folder, args.model_filename, args.g_arch)
+    main(args.trial_folder, args.model_filepath)
