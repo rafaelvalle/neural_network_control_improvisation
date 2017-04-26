@@ -8,12 +8,10 @@ import pdb
 
 def iterate_minibatches_proll(inputs, labels, batch_size, shuffle=True,
                               forever=True, length=128):
-    if shuffle:
-        indices = np.arange(len(inputs))
+
     while True:
-        if shuffle:
-            np.random.shuffle(indices)
-        for start_idx in range(0, len(inputs) - batch_size + 1, batch_size):
+        indices = np.random.choice(np.arange(len(inputs)), batch_size)
+        for start_idx in range(0, len(indices), batch_size):
             if shuffle:
                 excerpt = indices[start_idx:start_idx + batch_size]
             else:
@@ -33,10 +31,13 @@ def iterate_minibatches_proll(inputs, labels, batch_size, shuffle=True,
             break
 
 
-def iterate_minibatches_text(inputs, labels, batch_size, encoder, shuffle=True,
-                             forever=True, length=128, alphabet_size=128,
-                             padding=None):
+def iterate_minibatches_text(inputs, labels, batch_size, encoder=None,
+                             shuffle=True, forever=True, length=128,
+                             alphabet_size=128, padding=None):
     from text_utils import binarizeText
+
+    if encoder is None:
+        raise Exception("Encoder is {}")
     if shuffle:
         indices = np.arange(len(inputs))
     while True:
@@ -171,7 +172,7 @@ def load_text_data(datapaths, data_col, label_col, n_pieces, as_dict=True,
 
 
 def load_proll_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
-                    scale=True, patch_size=False):
+                    scale=True, patch_size=False, threshold=0):
 
     data = defaultdict(list)
     if not as_dict:
@@ -195,6 +196,9 @@ def load_proll_data(datapath, glob_file_str, n_pieces, crop=None, as_dict=True,
                 cur_data += cur_data.min()
                 cur_data = cur_data / float(cur_data.max())
                 cur_data = np.nan_to_num(cur_data)
+                if threshold:
+                    cur_data[cur_data < threshold] = 0
+                    cur_data[cur_data >= threshold] = 1
                 cur_data = cur_data * 2 - 1
             if patch_size:
                 ids = np.arange(0, cur_data.shape[1] - patch_size, patch_size)
