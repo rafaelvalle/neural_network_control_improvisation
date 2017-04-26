@@ -8,7 +8,7 @@ import glob2 as glob
 
 
 def convert(globstr, fs, program, threshold, samples, boolean, argmax,
-            offset):
+            offset, concat):
     for filepath in glob.glob(globstr):
         prolls = np.load(filepath)
         print('{}, {}'.format(filepath, prolls.shape))
@@ -22,7 +22,8 @@ def convert(globstr, fs, program, threshold, samples, boolean, argmax,
             proll = offset_proll(proll, offset)
             postprocess_proll(proll, threshold, argmax, boolean)
             pianoroll_to_midi(
-                proll, fs, program, filepath=filepath+'{}.midi'.format(i))
+                proll, fs, program, filepath=filepath+'{}.midi'.format(i),
+                threshold=concat)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -43,8 +44,10 @@ if __name__ == '__main__':
                         help="Argmax per timestep")
     parser.add_argument("-o", "--offset", type=int, default=0,
                         help="Piano roll pitch offset to start")
+    parser.add_argument("-c", "--concat", type=int, default=np.inf,
+                        help="Threshold for merging")
 
     args = parser.parse_args()
     print(args)
     convert(args.globstr, args.fs, args.program, args.threshold, args.samples,
-            args.boolean, args.argmax, args.offset)
+            args.boolean, args.argmax, args.offset, args.concat)
