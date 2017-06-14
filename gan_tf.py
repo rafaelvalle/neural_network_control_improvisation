@@ -3,6 +3,7 @@ sys.path.append(os.getcwd())
 
 import time
 import functools
+import cPickle as pkl
 
 import numpy as np
 import tensorflow as tf
@@ -20,15 +21,23 @@ import tflib.plot
 import pdb
 
 from data_processing import load_proll_data, iterate_minibatches_proll
+from data_processing import load_text_data, iterate_minibatches_text
+from text_utils import textEncoder
+
 MODE = 'wgan-gp' # dcgan, wgan, wgan-gp, lsgan
 DIM = 64 # Model dimensionality
-CRITIC_ITERS = 5 # How many iterations to train the critic for
+CRITIC_ITERS = 20 # How many iterations to train the critic for
 N_GPUS = 1 # Number of GPUs
 BATCH_SIZE = 64 # Batch size. Must be a multiple of N_GPUS
-ITERS = 200000 # How many iterations to train for
+ITERS = 60000 # How many iterations to train for
 LAMBDA = 10 # Gradient penalty lambda hyperparameter
 N_CHANNELS = 1
 OUTPUT_DIM = 64*64*N_CHANNELS # Number of pixels in each iamge
+WEIGHT_INIT_SD = 0.05
+REG_NOISE_SD = 0.00001
+WGAN_GP_GLR = 1e-5
+WGAN_GP_CLR = 1e-5
+ARCH = 'resnet'
 
 lib.print_model_settings(locals().copy())
 
@@ -39,26 +48,27 @@ def GeneratorAndDiscriminator():
     """
 
     # Baseline (G: DCGAN, D: DCGAN)
-    # return DCGANGenerator, DCGANDiscriminator
-
-    # No BN and constant number of filts in G
-    # return WGANPaper_CrippledDCGANGenerator, DCGANDiscriminator
-
+    if ARCH == 'dcgan':
+        return DCGANGenerator, DCGANDiscriminator
+    elif ARCH == 'wasserstein':
+        # No BN and constant number of filts in G
+        return WGANPaper_CrippledDCGANGenerator, DCGANDiscriminator
     # 512-dim 4-layer ReLU MLP G
-    # return FCGenerator, DCGANDiscriminator
-
-    # No normalization anywhere
-    # return functools.partial(DCGANGenerator, bn=False), functools.partial(DCGANDiscriminator, bn=False)
-
-    # Gated multiplicative nonlinearities everywhere
-    # return MultiplicativeDCGANGenerator, MultiplicativeDCGANDiscriminator
-
-    # tanh nonlinearities everywhere
-    # return functools.partial(DCGANGenerator, bn=True, nonlinearity=tf.tanh), \
-    #        functools.partial(DCGANDiscriminator, bn=True, nonlinearity=tf.tanh)
-
-    # 101-layer ResNet G and D
-    return ResnetGenerator, ResnetDiscriminator
+    elif ARCH == 'fc':
+        return FCGenerator, DCGANDiscriminator
+    elif ARCH == 'normless':
+        # No normalization anywhere
+        return functools.partial(DCGANGenerator, bn=False), functools.partial(DCGANDiscriminator, bn=False)
+    elif ARCH == 'gated':
+        # Gated multiplicative nonlinearities everywhere
+        return MultiplicativeDCGANGenerator, MultiplicativeDCGANDiscriminator
+    elif ARCH == 'tanh_all':
+        # tanh nonlinearities everywhere
+        return functools.partial(DCGANGenerator, bn=True, nonlinearity=tf.tanh), \
+            functools.partial(DCGANDiscriminator, bn=True, nonlinearity=tf.tanh)
+    else:
+        # 101-layer ResNet G and D
+        return ResnetGenerator, ResnetDiscriminator
 
     raise Exception('You must choose an architecture!')
 
@@ -151,9 +161,9 @@ def FCGenerator(n_samples, noise=None, FC_DIM=512):
     return output
 
 def DCGANGenerator(n_samples, noise=None, dim=DIM, bn=True, nonlinearity=tf.nn.relu):
-    lib.ops.conv2d.set_weights_stdev(0.02)
-    lib.ops.deconv2d.set_weights_stdev(0.02)
-    lib.ops.linear.set_weights_stdev(0.02)
+    lib.ops.conv2d.set_weights_stdev(WEIGHT_INIT_SD)
+    lib.ops.deconv2d.set_weights_stdev(WEIGHT_INIT_SD)
+    lib.ops.linear.set_weights_stdev(WEIGHT_INIT_SD)
 
     if noise is None:
         noise = tf.random_normal([n_samples, 128])
@@ -333,9 +343,9 @@ def FCDiscriminator(inputs, FC_DIM=512, n_layers=3):
 def DCGANDiscriminator(inputs, dim=DIM, bn=True, nonlinearity=LeakyReLU):
     output = tf.reshape(inputs, [-1, N_CHANNELS, 64, 64])
 
-    lib.ops.conv2d.set_weights_stdev(0.02)
-    lib.ops.deconv2d.set_weights_stdev(0.02)
-    lib.ops.linear.set_weights_stdev(0.02)
+    lib.ops.conv2d.set_weights_stdev(WEIGHT_INIT_SD)
+    lib.ops.deconv2d.set_weights_stdev(WEIGHT_INIT_SD)
+    lib.ops.linear.set_weights_stdev(WEIGHT_INIT_SD)
 
     output = lib.ops.conv2d.Conv2D('Discriminator.1', N_CHANNELS, dim, 5, output, stride=2)
     output = nonlinearity(output)
@@ -367,8 +377,7 @@ def DCGANDiscriminator(inputs, dim=DIM, bn=True, nonlinearity=LeakyReLU):
 Generator, Discriminator = GeneratorAndDiscriminator()
 
 with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
-
-    all_real_data_conv = tf.placeholder(tf.int32, shape=[BATCH_SIZE, N_CHANNELS, 64, 64])
+    all_real_data_conv = tf.placeholder(tf.float32, shape=[BATCH_SIZE, N_CHANNELS, 64, 64])
     if tf.__version__.startswith('1.'):
         split_real_data_conv = tf.split(all_real_data_conv, len(DEVICES))
     else:
@@ -377,8 +386,11 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
 
     for device_index, (device, real_data_conv) in enumerate(zip(DEVICES, split_real_data_conv)):
         with tf.device(device):
-            #real_data = tf.reshape(2*((tf.cast(real_data_conv, tf.float32)/255.)-.5), [BATCH_SIZE/len(DEVICES), OUTPUT_DIM])
-            real_data = tf.reshape(tf.cast(real_data_conv, tf.float32), [BATCH_SIZE/len(DEVICES), OUTPUT_DIM])
+            reg_noise = tf.random_normal(
+                    shape=[BATCH_SIZE/len(DEVICES), OUTPUT_DIM],
+                    mean=0., stddev=0.001)
+            real_data = tf.reshape(real_data_conv, [BATCH_SIZE/len(DEVICES), OUTPUT_DIM])
+            real_data += reg_noise
             fake_data = Generator(BATCH_SIZE/len(DEVICES))
 
             disc_real = Discriminator(real_data)
@@ -436,36 +448,32 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
                                              var_list=lib.params_with_name('Generator'), colocate_gradients_with_ops=True)
         disc_train_op = tf.train.RMSPropOptimizer(learning_rate=5e-5).minimize(disc_cost,
                                              var_list=lib.params_with_name('Discriminator.'), colocate_gradients_with_ops=True)
-
         clip_ops = []
         for var in lib.params_with_name('Discriminator'):
             clip_bounds = [-.01, .01]
             clip_ops.append(tf.assign(var, tf.clip_by_value(var, clip_bounds[0], clip_bounds[1])))
         clip_disc_weights = tf.group(*clip_ops)
-
     elif MODE == 'wgan-gp':
-        gen_train_op = tf.train.AdamOptimizer(learning_rate=1e-3, beta1=0.5, beta2=0.9).minimize(gen_cost,
+        gen_train_op = tf.train.AdamOptimizer(learning_rate=WGAN_GP_GLR, beta1=0.5, beta2=0.9).minimize(gen_cost,
                                           var_list=lib.params_with_name('Generator'), colocate_gradients_with_ops=True)
-        disc_train_op = tf.train.AdamOptimizer(learning_rate=1e-4, beta1=0.5, beta2=0.9).minimize(disc_cost,
+        disc_train_op = tf.train.AdamOptimizer(learning_rate=WGAN_GP_CLR, beta1=0.5, beta2=0.9).minimize(disc_cost,
                                            var_list=lib.params_with_name('Discriminator.'), colocate_gradients_with_ops=True)
-
     elif MODE == 'dcgan':
         gen_train_op = tf.train.AdamOptimizer(learning_rate=2e-4, beta1=0.5).minimize(gen_cost,
                                           var_list=lib.params_with_name('Generator'), colocate_gradients_with_ops=True)
         disc_train_op = tf.train.AdamOptimizer(learning_rate=2e-4, beta1=0.5).minimize(disc_cost,
                                            var_list=lib.params_with_name('Discriminator.'), colocate_gradients_with_ops=True)
-
     elif MODE == 'lsgan':
         gen_train_op = tf.train.RMSPropOptimizer(learning_rate=1e-4).minimize(gen_cost,
                                              var_list=lib.params_with_name('Generator'), colocate_gradients_with_ops=True)
         disc_train_op = tf.train.RMSPropOptimizer(learning_rate=1e-4).minimize(disc_cost,
                                               var_list=lib.params_with_name('Discriminator.'), colocate_gradients_with_ops=True)
-
     else:
         raise Exception()
 
     # For generating samples
-    fixed_noise = tf.constant(np.random.normal(size=(BATCH_SIZE, 128)).astype('float32'))
+    fixed_noise = tf.constant(
+        np.random.normal(size=(BATCH_SIZE, 128)).astype('float32'))
     all_fixed_noise_samples = []
     for device_index, device in enumerate(DEVICES):
         n_samples = BATCH_SIZE / len(DEVICES)
@@ -478,29 +486,58 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
     def generate_image(iteration):
         samples = session.run(all_fixed_noise_samples)
         samples = ((samples+1.)*(255.99/2)).astype('int32')
-        lib.save_images.save_images(np.flipud(samples.reshape((BATCH_SIZE, N_CHANNELS, 64, 64))),
-                                    'proll/iwgan/gan_tf_resnet/samples_{}_f.png'.format(iteration))
-        lib.save_images.save_images(samples.reshape((BATCH_SIZE, N_CHANNELS, 64, 64)),
-                                    'proll/iwgan/gan_tf_resnet/samples_{}_o.png'.format(iteration))
-
+        lib.save_images.save_images(
+            samples.reshape((BATCH_SIZE, N_CHANNELS, 64, 64)),
+            '{}/{}/{}/samples_{}.png'.format(DATATYPE, MODE, ARCH, iteration))
+    DATATYPE = 'text'
     # load data
-    datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Piano'
-    glob_file_str = '*.npy'
-    n_pieces = 0  # 0 is equal to all pieces, unbalanced dataset
-    crop = (32, 96)
-    alphabet_size = 64
-    as_dict = False
-    n_steps = 64
-    i_len = 64
-    patch_size = False
-    inputs, labels = load_proll_data(
-        datapath, glob_file_str, n_pieces, crop, as_dict, patch_size=patch_size)
-    if len(inputs) == 0:
-        raise Exception("No inputs")
-    labels = np.array(labels)
-    iterator = iterate_minibatches_proll
+    if DATATYPE == 'text':
+        datapaths = (
+            '/media/steampunkhd/rafaelvalle/datasets/TEXT/ag_news_csv/train.csv',
+            '/media/steampunkhd/rafaelvalle/datasets/TEXT/ag_news_csv/test.csv')
+
+        as_dict = False
+        data_cols = (2, 1)
+        label_cols = (0, 0)
+        n_pieces = 0  # 0 is equal to all examples, unbalanced dataset
+        n_steps = 64
+        patch_size = False
+        inputs, labels = load_text_data(
+            datapaths, data_cols, label_cols, n_pieces, as_dict,
+            patch_size=n_steps)
+        alphabet = [chr(i).lower() for i in range(32, 95)]
+        # alphabet = [chr(x) for x in range(127)]
+        # alphabet = list("abcdefghijklmnopqrstuvwxyz0123456789-,;.!?:'\"/\\|_@#$%^&*~`+ =<>()[]{}")
+        padding = 'repeat'
+        encoder = textEncoder(alphabet)
+        alphabet_size = len(encoder.alphabet) + 1
+        pkl.dump(encoder, open("encdec.pkl", "wb"))
+        iterator = functools.partial(
+            iterate_minibatches_text, encoder=encoder, padding=padding,
+            alphabet_size=alphabet_size)
+        i_len = 64
+    elif DATATYPE == 'proll':
+        datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Chorales'
+        glob_file_str = '*.npy'
+        as_dict = False
+        n_pieces = 0  # 0 is equal to all examples, unbalanced dataset
+        crop = (32, 96)
+        n_steps = 64
+        i_len = 64
+        patch_size = False
+        alphabet_size = 64
+        threshold = 0.5
+        inputs, labels = load_proll_data(
+            datapath, glob_file_str, n_pieces, crop, as_dict,
+            patch_size=patch_size, threshold=threshold)
+        if len(inputs) == 0:
+            raise Exception("No inputs")
+        labels = np.array(labels)
+        iterator = iterate_minibatches_proll
+
     # shuffle data
     np.random.shuffle(inputs)
+
     # ATTENTION: INPUTS AND LABELS ARE NOT ALIGNED!
     point_du_rupture = int(len(inputs)*0.8)
     train_gen = iterator(
@@ -520,18 +557,21 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
     # Save a batch of ground-truth samples
     # _x = inf_train_gen().next()
     """
-    pdb.set_trace()
     _x, _ = train_gen.next()
     _x = _x.reshape((BATCH_SIZE, N_CHANNELS, alphabet_size, i_len))
     _x_r = session.run(real_data, feed_dict={real_data_conv: _x})
     _x_r = ((_x_r+1.)*(255.99/2)).astype('int32')
-    lib.save_images.save_images(np.flipud(_x_r.reshape((BATCH_SIZE, N_CHANNELS, 64, 64))),
-                                'proll/iwgan/gan_tf_resnet/samples_groundtruth.png')
+    lib.save_images.save_images(
+        _x_r.reshape((BATCH_SIZE, N_CHANNELS, 64, 64)),
+        '{}/{}/{}/samples_groundtruth.png'.format(DATATYPE, MODE, ARCH))
 
     # Train loop
     print("Initializing all variables")
     session.run(tf.global_variables_initializer())
-    for iteration in range(ITERS):
+    saver = tf.train.Saver()
+    saver.restore(session, './text_wgan-gp_model.ckpt-39999')
+
+    for iteration in range(50000, ITERS):
         start_time = time.time()
 
         # Train generator
@@ -562,9 +602,11 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
                 _dev_disc_cost = session.run(disc_cost, feed_dict={all_real_data_conv: _data})
                 dev_disc_costs.append(_dev_disc_cost)
             lib.plot.plot('dev disc cost', np.mean(dev_disc_costs))
-
             generate_image(iteration)
         if (iteration < 5) or (iteration % 100 == 99):
             lib.plot.flush()
 
         lib.plot.tick()
+
+    saver.save(session,
+        '{}_{}_model.ckpt'.format(DATATYPE, MODE), global_step=iteration)
