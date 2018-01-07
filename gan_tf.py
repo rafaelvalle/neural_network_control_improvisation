@@ -24,20 +24,25 @@ from data_processing import load_proll_data, iterate_minibatches_proll
 from data_processing import load_text_data, iterate_minibatches_text
 from text_utils import textEncoder
 
+N_GPUS = 1 # number of GPUs
+NAME = 'piano'
 MODE = 'wgan-gp' # dcgan, wgan, wgan-gp, lsgan
 DIM = 64 # Model dimensionality
-CRITIC_ITERS = 20 # How many iterations to train the critic for
-N_GPUS = 1 # Number of GPUs
+CRITIC_ITERS = 10 # How many iterations to train the critic for
 BATCH_SIZE = 64 # Batch size. Must be a multiple of N_GPUS
-ITERS = 60000 # How many iterations to train for
+BEGIN_ITERS = 60000
+ITERS = 70000 # How many iterations to train for
+MODEL = './piano_proll_wgan-gp_model.ckpt-59999'
 LAMBDA = 10 # Gradient penalty lambda hyperparameter
 N_CHANNELS = 1
 OUTPUT_DIM = 64*64*N_CHANNELS # Number of pixels in each iamge
-WEIGHT_INIT_SD = 0.05
+WEIGHT_INIT_SD = 0.005
 REG_NOISE_SD = 0.00001
 WGAN_GP_GLR = 1e-5
 WGAN_GP_CLR = 1e-5
-ARCH = 'resnet'
+ARCH = 'dcgan'
+DATATYPE = 'proll'
+DEVICES = ['/gpu:{}'.format(i) for i in xrange(N_GPUS)]
 
 lib.print_model_settings(locals().copy())
 
@@ -72,7 +77,6 @@ def GeneratorAndDiscriminator():
 
     raise Exception('You must choose an architecture!')
 
-DEVICES = ['/gpu:{}'.format(i) for i in xrange(N_GPUS)]
 
 def LeakyReLU(x, alpha=0.2):
     return tf.maximum(alpha*x, x)
@@ -454,10 +458,12 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
             clip_ops.append(tf.assign(var, tf.clip_by_value(var, clip_bounds[0], clip_bounds[1])))
         clip_disc_weights = tf.group(*clip_ops)
     elif MODE == 'wgan-gp':
-        gen_train_op = tf.train.AdamOptimizer(learning_rate=WGAN_GP_GLR, beta1=0.5, beta2=0.9).minimize(gen_cost,
-                                          var_list=lib.params_with_name('Generator'), colocate_gradients_with_ops=True)
-        disc_train_op = tf.train.AdamOptimizer(learning_rate=WGAN_GP_CLR, beta1=0.5, beta2=0.9).minimize(disc_cost,
-                                           var_list=lib.params_with_name('Discriminator.'), colocate_gradients_with_ops=True)
+        gen_train_op = tf.train.AdamOptimizer(
+            learning_rate=WGAN_GP_GLR, beta1=0.5, beta2=0.9).minimize(gen_cost,
+            var_list=lib.params_with_name('Generator'), colocate_gradients_with_ops=True)
+        disc_train_op = tf.train.AdamOptimizer(
+            learning_rate=WGAN_GP_CLR, beta1=0.5, beta2=0.9).minimize(disc_cost,
+            var_list=lib.params_with_name('Discriminator.'), colocate_gradients_with_ops=True)
     elif MODE == 'dcgan':
         gen_train_op = tf.train.AdamOptimizer(learning_rate=2e-4, beta1=0.5).minimize(gen_cost,
                                           var_list=lib.params_with_name('Generator'), colocate_gradients_with_ops=True)
@@ -470,6 +476,11 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
                                               var_list=lib.params_with_name('Discriminator.'), colocate_gradients_with_ops=True)
     else:
         raise Exception()
+    # computing gradients of loss wrt to weights
+    disc_grad = tf.gradients(
+        disc_cost, [tf.trainable_variables()[18], tf.trainable_variables()[-2]])
+    gen_grad = tf.gradients(
+        gen_cost, [tf.trainable_variables()[0], tf.trainable_variables()[16]])
 
     # For generating samples
     fixed_noise = tf.constant(
@@ -488,8 +499,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
         samples = ((samples+1.)*(255.99/2)).astype('int32')
         lib.save_images.save_images(
             samples.reshape((BATCH_SIZE, N_CHANNELS, 64, 64)),
-            '{}/{}/{}/samples_{}.png'.format(DATATYPE, MODE, ARCH, iteration))
-    DATATYPE = 'text'
+            '{}/{}/{}/{}_samples_{}.png'.format(DATATYPE, MODE, ARCH, NAME, iteration))
     # load data
     if DATATYPE == 'text':
         datapaths = (
@@ -517,7 +527,7 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
             alphabet_size=alphabet_size)
         i_len = 64
     elif DATATYPE == 'proll':
-        datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Chorales'
+        datapath = '/media/steampunkhd/rafaelvalle/datasets/MIDI/Piano'
         glob_file_str = '*.npy'
         as_dict = False
         n_pieces = 0  # 0 is equal to all examples, unbalanced dataset
@@ -563,20 +573,21 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
     _x_r = ((_x_r+1.)*(255.99/2)).astype('int32')
     lib.save_images.save_images(
         _x_r.reshape((BATCH_SIZE, N_CHANNELS, 64, 64)),
-        '{}/{}/{}/samples_groundtruth.png'.format(DATATYPE, MODE, ARCH))
+        '{}/{}/{}/{}_samples_groundtruth.png'.format(DATATYPE, MODE, ARCH, NAME))
 
     # Train loop
     print("Initializing all variables")
     session.run(tf.global_variables_initializer())
     saver = tf.train.Saver()
-    saver.restore(session, './text_wgan-gp_model.ckpt-39999')
+    if MODEL:
+        saver.restore(session, MODEL)
 
-    for iteration in range(50000, ITERS):
-        start_time = time.time()
+    for iteration in range(BEGIN_ITERS, ITERS):
+        # start_time = time.time()
 
         # Train generator
         if iteration > 0:
-            _ = session.run(gen_train_op)
+            _, _gen_grad = session.run([gen_train_op, gen_grad])
 
         # Train critic
         if (MODE == 'dcgan') or (MODE == 'lsgan'):
@@ -587,14 +598,19 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
         for i in range(disc_iters):
             _data, _ = train_gen.next()
             _data = _data.reshape((BATCH_SIZE, N_CHANNELS, alphabet_size, i_len))
-            _disc_cost, _ = session.run([disc_cost, disc_train_op], feed_dict={all_real_data_conv: _data})
+            _disc_cost, _, _disc_grad = session.run([disc_cost, disc_train_op, disc_grad], feed_dict={all_real_data_conv: _data})
             if MODE == 'wgan':
                 _ = session.run([clip_disc_weights])
         lib.plot.plot('train disc cost', _disc_cost)
-        lib.plot.plot('time', time.time() - start_time)
+        if iteration > 0:
+            lib.plot.plot('dg0', np.mean(np.abs(_disc_grad[0])))
+            lib.plot.plot('dg1', np.mean(np.abs(_disc_grad[1])))
+            lib.plot.plot( 'gg0', np.mean(np.abs(_gen_grad[0])))
+            lib.plot.plot( 'gg1', np.mean(np.abs(_gen_grad[1])))
+        #lib.plot.plot('time', time.time() - start_time)
 
         if iteration % 200 == 199:
-            t = time.time()
+            # t = time.time()
             dev_disc_costs = []
             for dev_i in range(10):
                 _data, _ = dev_gen.next()
@@ -609,4 +625,4 @@ with tf.Session(config=tf.ConfigProto(allow_soft_placement=True)) as session:
         lib.plot.tick()
 
     saver.save(session,
-        '{}_{}_model.ckpt'.format(DATATYPE, MODE), global_step=iteration)
+        '{}_{}_{}_model.ckpt'.format(NAME, DATATYPE, MODE), global_step=iteration)
